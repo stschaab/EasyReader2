@@ -236,7 +236,7 @@
 
   <script>
     (function () {
-      const VERSION = "2.5";
+      const VERSION = "3.0";
       const API = "https://easyreader2.st-schaab.workers.dev";
       const LEVELS = ["original", "C1", "B2", "B1", "A2"];
       const STORAGE_BOOK = "easyreader2.bookId";
@@ -294,7 +294,9 @@
       async function loadLibrary() {
         bookListEl.innerHTML = '<div class="book-loading">Lade Bibliothek…</div>';
         try {
-          const res = await fetchWithTimeout(API + "/api/books", { headers: { "X-User-Id": userId } }, 10000);
+          // Statische Bibliotheks-Datei von GitHub Pages laden
+          const res = await fetchWithTimeout("library.json?v=" + VERSION, {}, 10000);
+          if (!res.ok) throw new Error("library.json nicht gefunden");
           const data = await res.json();
           bookListEl.innerHTML = "";
           if (!data.books || data.books.length === 0) {
@@ -309,7 +311,7 @@
               '<div class="info">' +
               '<div class="t">' + b.title + '</div>' +
               '<div class="a">' + (b.author || "") + '</div>' +
-              '<div class="meta">' + (b.lang || "").toUpperCase() + ' · ' + b.chunk_count + ' Absätze</div>' +
+              '<div class="meta">' + (b.lang || "").toUpperCase() + ' · ' + b.chunks + ' Absätze</div>' +
               '</div>';
             item.addEventListener("click", function () { openBook(b.id); });
             bookListEl.appendChild(item);
@@ -317,9 +319,8 @@
         } catch (e) {
           bookListEl.innerHTML =
             '<div class="book-loading">' +
-            '<p>⚠️ Server nicht erreichbar</p>' +
+            '<p>⚠️ Bibliothek konnte nicht geladen werden</p>' +
             '<p style="font-size:0.8rem;margin-top:0.5rem">' + (e.message || "Netzwerkfehler") + '</p>' +
-            '<p style="font-size:0.75rem;margin-top:0.8rem">Evtl. IPv6/Netz-Problem. Am PC testen oder später erneut.</p>' +
             '<button class="nav-btn" style="margin-top:1rem" onclick="location.reload()">Erneut versuchen</button>' +
             '</div>';
         }
@@ -330,10 +331,12 @@
         bookListEl.style.pointerEvents = "none";
 
         try {
-          // 1. Buch-Metadaten + Originaltexte
-          const res = await fetchWithTimeout(API + "/api/books/" + id, { headers: { "X-User-Id": userId } }, 15000);
+          // Statische JSON-Datei von GitHub Pages laden (sehr zuverlässig aus Russland)
+          // Benennung: book-1.json für Buch mit ID 1
+          const dataPath = "book-" + id + ".json?v=" + VERSION;
+          const res = await fetchWithTimeout(dataPath, {}, 20000);
+          if (!res.ok) throw new Error("Buchdatei nicht gefunden: " + dataPath);
           const data = await res.json();
-          if (data.error) { alert(data.error); bookListEl.style.opacity = ""; bookListEl.style.pointerEvents = ""; return; }
           book = data.book;
           chunks = data.chunks;
           if (!chunks || chunks.length === 0) { alert("Buch hat keine Absätze."); return; }
@@ -359,10 +362,7 @@
             levelsEl.appendChild(b);
           });
 
-          // 2. Vereinfachungen in einem separaten Request laden (im Hintergrund)
-          loadAllSimplifications(id);
-
-          // 3. Progress laden
+          // Progress laden (optional, localStorage-Fallback)
           idx = 0; level = "original";
           try {
             const saved = await apiGet("/api/progress/" + id);
@@ -371,39 +371,17 @@
               const savedLvl = saved.progress.level;
               level = LEVELS.includes(savedLvl) ? savedLvl : "original";
             }
-          } catch (e) {}
+          } catch (e) {
+            // Fallback: localStorage
+            const ls = localStorage.getItem("er2_" + id + "_pos");
+            if (ls) { try { const p = JSON.parse(ls); idx = p.idx || 0; level = p.level || "original"; } catch (e2) {} }
+          }
           setLevel(level);
           render();
         } catch (e) {
           bookListEl.style.opacity = "";
           bookListEl.style.pointerEvents = "";
           alert("Buch konnte nicht geladen werden: " + (e.message || "Netzwerkfehler"));
-        }
-      }
-
-      // Lädt alle Vereinfachungen für ein Buch in einem Request
-      async function loadAllSimplifications(bookId) {
-        try {
-          const res = await fetchWithTimeout(API + "/api/books/" + bookId + "/simplifications", { headers: { "X-User-Id": userId } }, 20000);
-          const data = await res.json();
-          if (data.error) throw new Error(data.error);
-          // simplifications ist ein Objekt: { chunk_id: { C1: "...", B2: "...", ... } }
-          for (const p of chunks) {
-            const sims = data.simplifications[p.id];
-            if (sims) {
-              p.C1 = sims.C1 || "";
-              p.B2 = sims.B2 || "";
-              p.B1 = sims.B1 || "";
-              p.A2 = sims.A2 || "";
-            }
-            p._loaded = true;
-          }
-          // Neu rendern falls gerade ein Level ausgewählt ist
-          render();
-        } catch (e) {
-          console.log("Vereinfachungen konnten nicht geladen werden: " + e.message);
-          // Alle Chunks als _loaded markieren, damit ad-hoc versucht wird
-          for (const p of chunks) p._loaded = true;
         }
       }
 
@@ -430,10 +408,13 @@
         saveProgress();
       }
 
-      // Progress speichern, aber nicht bei jeder Aaktion feuern (entlastet die API)
+      // Progress speichern, aber nicht bei jeder Aktion feuern (entlastet die API)
       let progressTimer = null;
       function saveProgress() {
         if (!bookId) return;
+        // Immer lokal sichern (Fallback)
+        localStorage.setItem("er2_" + bookId + "_pos", JSON.stringify({ idx: idx, level: level }));
+        // Debounced ans API schicken (optional)
         if (progressTimer) clearTimeout(progressTimer);
         progressTimer = setTimeout(function () {
           apiPost("/api/progress", { book_id: bookId, chunk_index: idx, level: level })
