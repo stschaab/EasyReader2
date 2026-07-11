@@ -234,7 +234,7 @@
 
   <script>
     (function () {
-      const VERSION = "2.2";
+      const VERSION = "2.3";
       const API = "https://easyreader2.st-schaab.workers.dev";
       const LEVELS = ["original", "C1", "B2", "B1", "A2"];
       const STORAGE_BOOK = "easyreader2.bookId";
@@ -449,9 +449,15 @@
           '<span class="icon" style="display:inline-block;animation:spin 1s linear infinite">⚙️</span>' +
           'Lade Absatz…';
 
+        console.log("[loadChunkLevels] chunk_id=" + p.id + " level=" + level + " URL=" + API + "/api/chunk/" + p.id);
+        const t0 = Date.now();
         fetchWithTimeout(API + "/api/chunk/" + p.id, { headers: { "X-User-Id": userId } }, 15000)
-          .then(function (res) { return res.json(); })
+          .then(function (res) {
+            console.log("[loadChunkLevels] Response: " + res.status + " in " + (Date.now() - t0) + "ms");
+            return res.json();
+          })
           .then(function (data) {
+            console.log("[loadChunkLevels] Daten: C1=" + (data.C1||"").length + " B2=" + (data.B2||"").length);
             if (data.error) throw new Error(data.error);
             // Alle Levels in den Chunk-Cache schreiben
             p.C1 = data.C1 || "";
@@ -463,6 +469,7 @@
             if (chunks[idx].id === p.id) render();
           })
           .catch(function (err) {
+            console.log("[loadChunkLevels] FEHLER nach " + (Date.now() - t0) + "ms: " + err.message);
             if (chunks[idx].id === p.id) {
               textEl.className = "placeholder";
               textEl.innerHTML =
