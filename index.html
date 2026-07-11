@@ -234,7 +234,7 @@
 
   <script>
     (function () {
-      const VERSION = "2.3";
+      const VERSION = "2.4";
       const API = "https://easyreader2.st-schaab.workers.dev";
       const LEVELS = ["original", "C1", "B2", "B1", "A2"];
       const STORAGE_BOOK = "easyreader2.bookId";
@@ -399,9 +399,15 @@
         saveProgress();
       }
 
+      // Progress speichern, aber nicht bei jeder Aaktion feuern (entlastet die API)
+      let progressTimer = null;
       function saveProgress() {
         if (!bookId) return;
-        apiPost("/api/progress", { book_id: bookId, chunk_index: idx, level: level });
+        if (progressTimer) clearTimeout(progressTimer);
+        progressTimer = setTimeout(function () {
+          apiPost("/api/progress", { book_id: bookId, chunk_index: idx, level: level })
+            .catch(function () { /* Progress ist optional */ });
+        }, 1500);
       }
 
       function wrapWords(text) {
@@ -449,27 +455,18 @@
           '<span class="icon" style="display:inline-block;animation:spin 1s linear infinite">⚙️</span>' +
           'Lade Absatz…';
 
-        console.log("[loadChunkLevels] chunk_id=" + p.id + " level=" + level + " URL=" + API + "/api/chunk/" + p.id);
-        const t0 = Date.now();
         fetchWithTimeout(API + "/api/chunk/" + p.id, { headers: { "X-User-Id": userId } }, 15000)
-          .then(function (res) {
-            console.log("[loadChunkLevels] Response: " + res.status + " in " + (Date.now() - t0) + "ms");
-            return res.json();
-          })
+          .then(function (res) { return res.json(); })
           .then(function (data) {
-            console.log("[loadChunkLevels] Daten: C1=" + (data.C1||"").length + " B2=" + (data.B2||"").length);
             if (data.error) throw new Error(data.error);
-            // Alle Levels in den Chunk-Cache schreiben
             p.C1 = data.C1 || "";
             p.B2 = data.B2 || "";
             p.B1 = data.B1 || "";
             p.A2 = data.A2 || "";
             p._loaded = true;
-            // Neu rendern, falls wir noch auf diesem Chunk+Level sind
             if (chunks[idx].id === p.id) render();
           })
           .catch(function (err) {
-            console.log("[loadChunkLevels] FEHLER nach " + (Date.now() - t0) + "ms: " + err.message);
             if (chunks[idx].id === p.id) {
               textEl.className = "placeholder";
               textEl.innerHTML =

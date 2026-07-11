@@ -198,6 +198,12 @@ export default {
       if (path === "/api/progress" && request.method === "POST") {
         const { book_id, chunk_index, level } = await request.json();
         if (!book_id) return json({ error: "book_id erforderlich" }, 400);
+
+        // User anlegen falls noch nicht vorhanden (anonym)
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO users (id, type) VALUES (?, 'anon')`
+        ).bind(userId).run();
+
         await env.DB.prepare(
           `INSERT OR REPLACE INTO progress (user_id, book_id, chunk_index, level, updated_at)
            VALUES (?, ?, ?, ?, datetime('now'))`
