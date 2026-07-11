@@ -51,9 +51,7 @@ export default {
         return json({ books: r.results });
       }
 
-      // ─── Buch-Detail mit Chunks (nur Originaltext, ohne Vereinfachungen) ───
-      // Vereinfachungen werden on-demand pro Chunk geladen (siehe /api/chunk/:id)
-      // Sonst wird der Response zu gross und bricht ab.
+      // ─── Buch-Detail: nur Metadaten + Originaltexte (klein, schnell) ───
       const bookMatch = path.match(/^\/api\/books\/(\d+)$/);
       if (bookMatch && request.method === "GET") {
         const bookId = parseInt(bookMatch[1], 10);
@@ -76,36 +74,29 @@ export default {
           chapter: c.chapter_num ? "Т." + (c.volume || 1) + " · Ч." + (c.part || 1) + " · Гл. " + toRoman(c.chapter_num) : null,
           original: c.original_text,
           word_count: c.word_count,
-          C1: "", B2: "", B1: "", A2: "",  // leer, werden on-demand geladen
+          C1: "", B2: "", B1: "", A2: "",
         }));
 
         return json({ book, chunks: chunksOut });
       }
 
-      // ─── Einzelner Chunk mit allen Vereinfachungen ───
-      const chunkMatch = path.match(/^\/api\/chunk\/(\d+)$/);
-      if (chunkMatch && request.method === "GET") {
-        const chunkId = parseInt(chunkMatch[1], 10);
-        const chunk = await env.DB.prepare(
-          `SELECT id, book_id, original_text FROM chunks WHERE id = ?`
-        ).bind(chunkId).first();
-        if (!chunk) return json({ error: "Chunk nicht gefunden" }, 404);
-
+      // ─── Alle Vereinfachungen für ein Buch (ein großer Request) ───
+      const simsMatch = path.match(/^\/api\/books\/(\d+)\/simplifications$/);
+      if (simsMatch && request.method === "GET") {
+        const bookId = parseInt(simsMatch[1], 10);
         const sims = await env.DB.prepare(
-          `SELECT level, simplified_text FROM simplifications WHERE chunk_id = ?`
-        ).bind(chunkId).all();
+          `SELECT s.chunk_id, s.level, s.simplified_text
+           FROM simplifications s JOIN chunks c ON s.chunk_id = c.id
+           WHERE c.book_id = ? ORDER BY s.chunk_id, s.level`
+        ).bind(bookId).all();
 
-        const levels = {};
-        for (const s of sims.results) levels[s.level] = s.simplified_text;
-
-        return json({
-          id: chunk.id,
-          original: chunk.original_text,
-          C1: levels.C1 || "",
-          B2: levels.B2 || "",
-          B1: levels.B1 || "",
-          A2: levels.A2 || "",
-        });
+        // Nach chunk_id gruppiert als Objekt
+        const result = {};
+        for (const s of sims.results) {
+          if (!result[s.chunk_id]) result[s.chunk_id] = {};
+          result[s.chunk_id][s.level] = s.simplified_text;
+        }
+        return json({ simplifications: result });
       }
 
       // ─── RAG-Vereinfachung ───
