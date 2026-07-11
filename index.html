@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>SimpleReader — Война и мир</title>
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #171a21;
+      --card-2: #1c212b;
+      --text: #e8e8ea;
+      --muted: #9aa0aa;
+      --muted-2: #6b717b;
+      --accent: #4f8cff;
+      --accent-soft: rgba(79, 140, 255, 0.15);
+      --border: #262b35;
+      --level: #3a4150;
+      --ok: #2ecc71;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", "Noto Sans", sans-serif;
+      height: 100dvh;          /* mobil-sicher, berücksichtigt URL-Leiste */
+      overflow: hidden;        /* keine Seiten-Scroll, alles im Rahmen */
+      -webkit-tap-highlight-color: transparent;
+      -webkit-text-size-adjust: 100%;  /* verhindert Samsung-Browser-Skalierung */
+      text-size-adjust: 100%;
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      max-width: 760px;
+      margin: 0 auto;
+      padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+    }
+
+    /* --- Kopf --- */
+    header {
+      padding: 0.9rem 1.1rem 0.6rem;
+      flex-shrink: 0;
+    }
+    .head-row {
+      display: flex;
+      align-items: baseline;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+    }
+    .head-row h1 {
+      margin: 0;
+      font-size: 1.15rem;
+      letter-spacing: -0.01em;
+    }
+    .head-row .author {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+    .part {
+      color: var(--muted-2);
+      font-size: 0.76rem;
+      margin: 0.15rem 0 0;
+    }
+
+    /* --- Level-Umschalter --- */
+    .levels {
+      display: flex;
+      gap: 0.4rem;
+      padding: 0.4rem 1.1rem 0.7rem;
+      overflow-x: auto;
+      flex-shrink: 0;
+      scrollbar-width: none;
+    }
+    .levels::-webkit-scrollbar { display: none; }
+
+    .lvl-btn {
+      flex-shrink: 0;
+      padding: 0.45rem 0.9rem;
+      background: var(--card);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-family: inherit;
+    }
+    .lvl-btn:hover { color: var(--text); border-color: var(--muted-2); }
+    .lvl-btn.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+
+    /* --- Chunk-Anzeige (zentriert, scrollbar falls nötig) --- */
+    main {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 1.3rem;
+      overflow-y: auto;        /* Scroll, falls ein Chunk zu groß ist */
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .chunk {
+      max-width: 620px;
+      width: 100%;
+      text-align: left;
+    }
+
+    .chunk-nr {
+      color: var(--muted-2);
+      font-size: 0.78rem;
+      margin-bottom: 0.6rem;
+      letter-spacing: 0.04em;
+    }
+
+    .chunk-text {
+      font-size: 1.6rem;
+      font-size: clamp(1.3rem, 5.5vw, 1.6rem);  /* responsiv, Samsung-kompatibel */
+      line-height: 1.72;
+      color: var(--text);
+      hyphens: auto;
+      -webkit-text-size-adjust: 100%;
+    }
+    .chunk-text .word {
+      cursor: pointer;
+      border-radius: 4px;
+      -webkit-tap-highlight-color: rgba(79, 140, 255, 0.25);
+      transition: background 0.1s;
+    }
+    .chunk-text .word:active {
+      background: var(--accent-soft);
+    }
+
+    /* Platzhalter, wenn Level noch leer ist */
+    .placeholder {
+      text-align: center;
+      color: var(--muted);
+      padding: 2rem 1rem;
+    }
+    .placeholder .icon {
+      font-size: 2rem;
+      display: block;
+      margin-bottom: 0.6rem;
+      opacity: 0.6;
+    }
+    .placeholder .pill {
+      display: inline-block;
+      padding: 0.2rem 0.7rem;
+      background: var(--level);
+      border-radius: 6px;
+      font-size: 0.8rem;
+      margin-top: 0.4rem;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    /* --- Übersetzungs-Pop-up --- */
+    .dict-popup {
+      position: fixed;
+      z-index: 100;
+      background: var(--card-2);
+      border: 1px solid var(--accent);
+      border-radius: 12px;
+      padding: 0.9rem 1.1rem;
+      max-width: 300px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+      font-size: 0.95rem;
+      display: none;
+    }
+    .dict-popup.visible { display: block; }
+    .dict-popup .dw {
+      display: flex;
+      align-items: baseline;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 0.3rem;
+    }
+    .dict-popup .lemma {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .dict-popup .inflected {
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .dict-popup .pos {
+      color: var(--muted-2);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.3rem;
+    }
+    .dict-popup .gloss {
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .dict-popup .loading {
+      color: var(--muted);
+      font-style: italic;
+    }
+    .dict-popup .err {
+      color: var(--muted);
+    }
+    .dict-popup .close-hint {
+      color: var(--muted-2);
+      font-size: 0.7rem;
+      margin-top: 0.5rem;
+    }
+
+    /* --- Fuß-Navigation --- */
+    footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.7rem 1.1rem 1rem;
+      flex-shrink: 0;
+    }
+
+    .nav-btn {
+      min-width: 64px;
+      padding: 0.7rem 1rem;
+      background: var(--card);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: all 0.12s ease;
+      font-family: inherit;
+    }
+    .nav-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .nav-btn:active:not(:disabled) { transform: scale(0.96); }
+    .nav-btn:disabled { opacity: 0.3; cursor: default; }
+
+    /* --- Diagnose-Menü --- */
+    .diag-btn {
+      background: transparent;
+      border: none;
+      color: var(--muted-2);
+      font-size: 1.1rem;
+      cursor: pointer;
+      padding: 0.3rem 0.5rem;
+      font-family: inherit;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* --- Text-to-Speech --- */
+    .tts-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.3rem 1.1rem 0.5rem;
+      flex-shrink: 0;
+    }
+    .tts-btn {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.4rem 0.7rem;
+      font-size: 1.1rem;
+      cursor: pointer;
+      font-family: inherit;
+      -webkit-tap-highlight-color: transparent;
+      transition: all 0.12s;
+    }
+    .tts-btn:hover { border-color: var(--accent); }
+    .tts-btn.playing {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .tts-speed {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .tts-speed input[type="range"] {
+      width: 80px;
+      accent-color: var(--accent);
+    }
+    .tts-speed .val {
+      min-width: 28px;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      color: var(--text);
+    }
+    .tts-autoplay {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      color: var(--muted);
+      font-size: 0.82rem;
+      cursor: pointer;
+      user-select: none;
+    }
+    .tts-autoplay input {
+      accent-color: var(--accent);
+      width: 18px;
+      height: 18px;
+      cursor: pointer;
+    }
+    .tts-autoplay.active { color: var(--accent); }
+    .diag-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      z-index: 200;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    .diag-overlay.visible { display: flex; }
+    .diag-panel {
+      background: var(--card-2);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.3rem;
+      max-width: 380px;
+      width: 100%;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    .diag-panel h3 {
+      margin: 0 0 0.8rem;
+      font-size: 1.05rem;
+    }
+    .diag-result {
+      background: var(--card);
+      border-radius: 8px;
+      padding: 0.7rem;
+      margin: 0.5rem 0;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: var(--text);
+      white-space: pre-wrap;
+      font-family: ui-monospace, "Cascadia Code", monospace;
+    }
+    .diag-result.ok { border-left: 3px solid var(--ok); }
+    .diag-result.fail { border-left: 3px solid #e74c3c; }
+    .diag-run {
+      width: 100%;
+      padding: 0.7rem;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin: 0.5rem 0;
+      font-family: inherit;
+    }
+    .diag-close {
+      width: 100%;
+      padding: 0.6rem;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      margin-top: 0.3rem;
+      font-family: inherit;
+    }
+
+    .counter {
+      color: var(--muted);
+      font-size: 0.88rem;
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+      flex: 1;
+    }
+    .counter .now { color: var(--text); font-weight: 600; }
+    .counter .ver {
+      display: block;
+      font-size: 0.68rem;
+      color: var(--muted-2);
+      margin-top: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="head-row">
+        <h1 id="book-title">…</h1>
+        <span class="author" id="book-author"></span>
+      </div>
+      <p class="part" id="book-part"></p>
+    </header>
+
+    <!-- Level-Umschalter -->
+    <nav class="levels" id="levels"></nav>
+
+    <!-- Chunk-Anzeige -->
+    <main>
+      <div class="chunk">
+        <div class="chunk-nr" id="chunk-nr"></div>
+        <div class="chunk-text" id="chunk-text"></div>
+      </div>
+    </main>
+
+    <!-- Text-to-Speech -->
+    <div class="tts-bar">
+      <button class="tts-btn" id="tts-btn" aria-label="Vorlesen">🔊</button>
+      <div class="tts-speed">
+        <span>Tempo</span>
+        <input type="range" id="tts-rate" min="0.5" max="1.5" step="0.05" value="0.8" />
+        <span class="val" id="tts-rate-val">0.8×</span>
+      </div>
+      <label class="tts-autoplay" id="tts-autoplay-label">
+        <input type="checkbox" id="tts-autoplay" />
+        <span>▶ Autoplay</span>
+      </label>
+    </div>
+
+    <!-- Blättern -->
+    <footer>
+      <button class="nav-btn" id="prev" aria-label="Zurück">‹</button>
+      <div class="counter" id="counter"></div>
+      <button class="diag-btn" id="diag-open" aria-label="Diagnose" title="Verbindung testen">🔧</button>
+      <button class="nav-btn" id="next" aria-label="Weiter">›</button>
+    </footer>
+  </div>
+
+  <!-- Übersetzungs-Pop-up -->
+  <div class="dict-popup" id="dict-popup"></div>
+
+  <!-- Diagnose-Menü -->
+  <div class="diag-overlay" id="diag-overlay">
+    <div class="diag-panel">
+      <h3>🔧 Verbindungsdiagnose</h3>
+      <p style="color:var(--muted);font-size:0.85rem;margin:0 0 0.8rem">
+        Testet, ob SimpleReader den KI-Server erreichen kann.
+      </p>
+      <button class="diag-run" id="diag-run">Test starten</button>
+      <div id="diag-results"></div>
+      <button class="diag-close" id="diag-close">Schließen</button>
+    </div>
+  </div>
+
+  <script src="data.js?v=0.19"></script>
+  <script>
+    (function () {
+      const VERSION = "0.19";   // <- ändert sich bei jedem Update -> sichtbar am Handy
+      const book = window.BOOK;
+      if (!book) return;
+
+      const LEVELS = ["original", "C1", "B2", "B1", "A2"];
+      const STORAGE_POS = "simplereader.pos";
+      const STORAGE_LVL = "simplereader.lvl";
+
+      // Position & Level aus dem letzten Besuch wiederherstellen (localStorage)
+      let saved = {};
+      try { saved = JSON.parse(localStorage.getItem(STORAGE_POS) || "{}"); } catch (e) {}
+      let idx = Math.min(Math.max(saved.idx || 0, 0), book.paragraphs.length - 1);
+      let level = LEVELS.includes(saved.lvl) ? saved.lvl : "original";
+
+      // Kopf füllen
+      document.getElementById("book-title").textContent = book.meta.title;
+      document.getElementById("book-author").textContent = book.meta.author;
+      document.getElementById("book-part").textContent = book.meta.part || "";
+
+      // Level-Buttons erzeugen
+      const levelsEl = document.getElementById("levels");
+      LEVELS.forEach(function (lvl) {
+        const b = document.createElement("button");
+        b.className = "lvl-btn";
+        b.dataset.lvl = lvl;
+        b.textContent = lvl === "original" ? "Original" : lvl;
+        b.addEventListener("click", function () { setLevel(lvl); });
+        levelsEl.appendChild(b);
+      });
+
+      const textEl = document.getElementById("chunk-text");
+      const nrEl = document.getElementById("chunk-nr");
+      const counterEl = document.getElementById("counter");
+      const prevBtn = document.getElementById("prev");
+      const nextBtn = document.getElementById("next");
+
+      function save() {
+        try { localStorage.setItem(STORAGE_POS, JSON.stringify({ idx: idx, lvl: level })); } catch (e) {}
+      }
+
+      // Wort für klickbar: jedes kyrillische Wort in ein <span> wrappen
+      // Plus Token für Satzzeichen bleibt draußen, um es durchlässig zu machen.
+      function wrapWords(text) {
+        // kyrillische Wörter (mit Akzenten) in spans verpacken
+        return text
+          .replace(/[А-Яа-яЁё]+/g, function (w) {
+            return '<span class="word">' + w + "</span>";
+          })
+          .replace(/&nbsp;/g, "\u00A0");
+      }
+
+      // Ad-hoc Vereinfachung über Cloudflare Worker → GLM-5.2
+      // Cache: Key = chunkId + ":" + level → vereinfachter Text
+      const WORKER_URL = "https://bitter-bush-c665.st-schaab.workers.dev/";
+      const adHocCache = {};
+
+      function renderAdHoc(p, lvl) {
+        const cacheKey = p.id + ":" + lvl;
+
+        // 1. Bereits gecacht? → sofort anzeigen
+        if (adHocCache[cacheKey]) {
+          textEl.className = "chunk-text";
+          textEl.innerHTML = wrapWords(adHocCache[cacheKey]);
+          return;
+        }
+
+        // 2. Ladeanzeige
+        textEl.className = "placeholder";
+        textEl.innerHTML =
+          '<span class="icon" style="display:inline-block;animation:spin 1s linear infinite">⚙️</span>' +
+          'Generiere <strong>' + lvl + '</strong>-Vereinfachung…' +
+          '<br><span style="font-size:0.8rem;color:var(--muted-2)">GLM-5.2 · kann bis zu 30 Sekunden dauern</span>';
+
+        // 3. Worker aufrufen, mit Timeout und AUTOMATISCHER Wiederholung
+        // Bei Timeout/Netzwerkfehler: 1x von selbst neu probieren,
+        // erst beim 2. Fehlschlag dem User die "nochmal tippen"-Meldung zeigen
+        callWorkerWithRetry(p.original, lvl, 1)
+          .then(function (simplified) {
+            adHocCache[cacheKey] = simplified;
+            if (book.paragraphs[idx].id === p.id && level === lvl) {
+              textEl.className = "chunk-text";
+              textEl.innerHTML = wrapWords(simplified);
+            }
+          })
+          .catch(function (err) {
+            if (book.paragraphs[idx].id === p.id && level === lvl) {
+              textEl.className = "placeholder";
+              const msg = err.message === "Timeout"
+                ? "Zeitüberschreitung – GLM braucht gerade zu lange."
+                : (err.message || "Netzwerkfehler");
+              textEl.innerHTML =
+                '<span class="icon">⚠️</span>' +
+                'Fehler bei der Generierung.' +
+                '<br><span style="font-size:0.8rem;color:var(--muted-2)">' + msg + '</span>' +
+                '<br><br><span style="font-size:0.75rem;color:var(--muted-2)">Nochmal auf ' + lvl + ' tippen zum Wiederholen</span>';
+            }
+          });
+      }
+
+      // Ruft den Worker auf; bei Fehlschlag retries-mal automatisch wiederholen
+      function callWorkerWithRetry(text, lvl, retries) {
+        return fetchWithTimeout(WORKER_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({ text: text, level: lvl }),
+        }, 45000)
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            if (data.error) throw new Error(data.error);
+            return data.simplified.trim();
+          })
+          .catch(function (err) {
+            if (retries > 0) {
+              // Ladeanzeige aktualisieren: "zweiter Versuch…"
+              if (book.paragraphs[idx].id === text.split(" ")[0] || true) {
+                textEl.innerHTML =
+                  '<span class="icon" style="display:inline-block;animation:spin 1s linear infinite">⚙️</span>' +
+                  'Nochmaliger Versuch… <span style="font-size:0.8rem;color:var(--muted-2)">(GLM war beschäftigt)</span>';
+              }
+              // 2 Sekunden warten, dann nochmal
+              return new Promise(function (r) { setTimeout(r, 2000); })
+                .then(function () { return callWorkerWithRetry(text, lvl, retries - 1); });
+            }
+            throw err;
+          });
+      }
+
+      // fetch mit Timeout: bricht nach ms Millisekunden ab
+      function fetchWithTimeout(url, options, ms) {
+        return new Promise(function (resolve, reject) {
+          const controller = new AbortController();
+          const timer = setTimeout(function () {
+            controller.abort();
+            reject(new Error("Timeout"));
+          }, ms);
+          fetch(url, Object.assign({ signal: controller.signal }, options))
+            .then(function (res) { clearTimeout(timer); resolve(res); })
+            .catch(function (err) {
+              clearTimeout(timer);
+              reject(err);
+            });
+        });
+      }
+
+      function setLevel(lvl) {
+        level = lvl;
+        Array.prototype.forEach.call(levelsEl.children, function (b) {
+          b.classList.toggle("active", b.dataset.lvl === lvl);
+        });
+        if (typeof stopTTS === "function") stopTTS();
+        render();
+        save();
+      }
+
+      function go(delta) {
+        const next = idx + delta;
+        if (next < 0 || next >= book.paragraphs.length) return;
+        idx = next;
+        render();
+        save();
+      }
+
+      function render() {
+        const p = book.paragraphs[idx];
+        // Chapter-Referenz anzeigen (falls vorhanden), sonst nur Nummer
+        const ref = p.bookRef
+          ? p.bookRef + "  ·  Absatz " + (idx + 1) + " / " + book.paragraphs.length
+          : "Absatz " + (idx + 1) + " / " + book.paragraphs.length;
+        nrEl.textContent = ref;
+
+        // Text oder Platzhalter
+        if (level === "original") {
+          textEl.className = "chunk-text";
+          textEl.innerHTML = wrapWords(p.original);
+        } else {
+          const val = p[level];
+          if (val && val.trim()) {
+            // Vorgefertigte Vereinfachung vorhanden
+            textEl.className = "chunk-text";
+            textEl.innerHTML = wrapWords(val);
+          } else {
+            // Keine Vorgabe → ad-hoc über Worker anfordern (GLM-5.2)
+            renderAdHoc(p, level);
+          }
+        }
+
+        // Zähler
+        counterEl.innerHTML =
+          '<span class="now">' + (idx + 1) + '</span> / ' + book.paragraphs.length +
+          '<span class="ver">v' + VERSION + '</span>';
+
+        // Buttons deaktivieren an den Enden
+        prevBtn.disabled = idx === 0;
+        nextBtn.disabled = idx === book.paragraphs.length - 1;
+      }
+
+      // Events
+      prevBtn.addEventListener("click", function () { go(-1); });
+      nextBtn.addEventListener("click", function () { go(1); });
+
+      // Tastatur (für Desktop-Tests)
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowLeft") go(-1);
+        else if (e.key === "ArrowRight") go(1);
+      });
+
+      // Wischen (für Handy: nur horizontale Wischer blättern,
+      // vertikale Wischer scrollen lassen, ohne zu flippen)
+      let touchStartX = null;
+      let touchStartY = null;
+      let swipeActive = false;
+      document.addEventListener("touchstart", function (e) {
+        touchStartX = e.changedTouches[0].clientX;
+        touchStartY = e.changedTouches[0].clientY;
+        swipeActive = true;
+      }, { passive: true });
+      document.addEventListener("touchmove", function (e) {
+        if (!swipeActive || touchStartX === null) return;
+        const dx = Math.abs(e.changedTouches[0].clientX - touchStartX);
+        const dy = Math.abs(e.changedTouches[0].clientY - touchStartY);
+        // Wenn die Vertikalbewegung deutlicher ist, Flippen abbrechen → scrollen lassen
+        if (dy > dx && dy > 12) swipeActive = false;
+      }, { passive: true });
+      document.addEventListener("touchend", function (e) {
+        if (!swipeActive || touchStartX === null) { swipeActive = false; return; }
+        const dx = e.changedTouches[0].clientX - touchStartX;
+        if (Math.abs(dx) > 60) go(dx < 0 ? 1 : -1);
+        swipeActive = false;
+        touchStartX = null;
+      }, { passive: true });
+
+      // ─── Wörterbuch / Wort-Übersetzung ───
+      // Wird aktiviert, wenn der Nutzer ein Wort markiert (lange drücken auf Android)
+      const dictPopup = document.getElementById("dict-popup");
+      const dictCache = {}; // Wort → Ergebnis (verhindert Doppel-Anfragen)
+
+      function showPopup(html, x, y) {
+        dictPopup.innerHTML = html;
+        dictPopup.classList.add("visible");
+        // Position: nahe der Auswahl, aber im viewport halten
+        const pw = dictPopup.offsetWidth || 280;
+        const ph = dictPopup.offsetHeight || 100;
+        let left = Math.max(10, Math.min(x - pw / 2, window.innerWidth - pw - 10));
+        let top = y - ph - 16; // über der Auswahl
+        if (top < 10) top = y + 30; // wenn kein Platz oben, dann darunter
+        dictPopup.style.left = left + "px";
+        dictPopup.style.top = top + "px";
+      }
+
+      function hidePopup() {
+        dictPopup.classList.remove("visible");
+      }
+
+      // Grundform aus "form-of"-Eintrag extrahieren
+      function extractLemma(html) {
+        // Muster: "...singular of князь (knjazʹ)" → князь
+        const m = html.match(/of\s+([А-Яа-яЁё][А-Яа-яЁё]*(?:́[А-Яа-яЁё]+)?)/);
+        return m ? m[1] : null;
+      }
+
+      // Betonungsakzente (Combining Acute, U+0301) entfernen.
+      // Wiktionary liefert Grundformen oft mit Akzent (говори́ть),
+      // aber die Seiten existieren nur ohne Akzent (говорить).
+      function stripAccents(word) {
+        return word.replace(/\u0301/g, "");
+      }
+
+      function stripTags(html) {
+        const d = document.createElement("div");
+        d.innerHTML = html;
+        return d.textContent || d.innerText || "";
+      }
+
+      async function lookUp(word, x, y) {
+        word = word.trim().replace(/[^А-Яа-яЁё]/g, "");
+        if (!word || word.length < 2) return;
+
+        showPopup(
+          '<div class="loading">Suche „' + word + "“…</div>",
+          x, y
+        );
+
+        // Cache prüfen
+        if (dictCache[word]) {
+          renderDictEntry(word, dictCache[word], x, y);
+          return;
+        }
+
+        try {
+          const url =
+            "https://en.wiktionary.org/api/rest_v1/page/definition/" +
+            encodeURIComponent(word);
+          const res = await fetch(url);
+
+          if (res.status === 404) {
+            // Wort existiert nicht im Wiktionary – KEIN Verbindungsfehler
+            const entry = { notFound: true };
+            dictCache[word] = entry;
+            renderDictEntry(word, entry, x, y);
+            return;
+          }
+          if (!res.ok) throw new Error("HTTP " + res.status);
+
+          const json = await res.json();
+
+          if (!json.ru || !json.ru.length) {
+            const entry = { notFound: true };
+            dictCache[word] = entry;
+            renderDictEntry(word, entry, x, y);
+            return;
+          }
+
+          const section = json.ru[0]; // erste Wortart
+          const pos = section.partOfSpeech || "";
+          const def0 = section.definitions[0];
+          const defText = stripTags(def0.definition);
+
+          // Ist es ein "form-of"-Eintrag? → Grundform extrahieren
+          // WICHTIG: aus dem gestrippten Text extrahieren, nicht aus dem Raw-HTML
+          // (das Lemma steckt in <a>/<i> Tags und ist sonst nicht mit Regex greifbar)
+          const lemma = extractLemma(defText);
+
+          let gloss = defText;
+          let displayLemma = word;
+
+          if (lemma && lemma !== word) {
+            // Grundform ohne Akzent für die Abfrage (Wiktionary-Seiten sind ohne Akzent)
+            const lemmaClean = stripAccents(lemma);
+            displayLemma = lemmaClean;
+            try {
+              const url2 =
+                "https://en.wiktionary.org/api/rest_v1/page/definition/" +
+                encodeURIComponent(lemmaClean);
+              const res2 = await fetch(url2);
+              if (res2.ok) {
+                const json2 = await res2.json();
+                if (json2.ru && json2.ru[0] && json2.ru[0].definitions[0]) {
+                  gloss = stripTags(json2.ru[0].definitions[0].definition);
+                }
+              }
+            } catch (e) {
+              // Zweite Abfrage fehlgeschlagen → form-of-Text behalten
+            }
+          }
+
+          const entry = {
+            lemma: displayLemma,
+            pos: pos,
+            gloss: gloss,
+            inflected: lemma && lemma !== word ? word : null,
+          };
+          dictCache[word] = entry;
+          renderDictEntry(word, entry, x, y);
+        } catch (e) {
+          // Echter Netzwerk-/CORS-Fehler
+          const entry = { error: true };
+          dictCache[word] = entry;
+          renderDictEntry(word, entry, x, y);
+        }
+      }
+
+      function renderDictEntry(word, entry, x, y) {
+        let html;
+        if (entry.notFound) {
+          html =
+            '<div class="dw"><span class="lemma">' + word + "</span></div>" +
+            '<div class="err">Nicht im Wörterbuch gefunden.</div>';
+        } else if (entry.error) {
+          html =
+            '<div class="err">Verbindungsfehler. Bitte später erneut.</div>';
+        } else {
+          html = '<div class="dw">';
+          html += '<span class="lemma">' + entry.lemma + "</span>";
+          if (entry.inflected) {
+            html +=
+              '<span class="inflected">(von „' + entry.inflected + "“)</span>";
+          }
+          html += "</div>";
+          if (entry.pos) {
+            html += '<div class="pos">' + entry.pos + "</div>";
+          }
+          html += '<div class="gloss">' + entry.gloss + "</div>";
+        }
+        html += '<div class="close-hint">Tippe daneben zum Schließen</div>';
+        showPopup(html, x, y);
+      }
+
+      // Klick auf ein Wort → Übersetzung (statt langes Drücken)
+      textEl.addEventListener("click", function (e) {
+        const wordEl = e.target.closest(".word");
+        if (!wordEl) { hidePopup(); return; }
+        const word = wordEl.textContent.trim();
+        const rect = wordEl.getBoundingClientRect();
+        lookUp(word, rect.left + rect.width / 2, rect.top);
+      });
+
+      // Pop-up schließen beim Tippen daneben oder Blättern
+      document.addEventListener("click", function (e) {
+        if (!dictPopup.contains(e.target) && !e.target.closest(".word")) {
+          hidePopup();
+        }
+      });
+      prevBtn.addEventListener("click", hidePopup);
+      nextBtn.addEventListener("click", hidePopup);
+
+      // ─── Diagnose-Menü ───
+      const diagOverlay = document.getElementById("diag-overlay");
+      const diagResults = document.getElementById("diag-results");
+
+      document.getElementById("diag-open").addEventListener("click", function () {
+        diagOverlay.classList.add("visible");
+        hidePopup();
+      });
+      document.getElementById("diag-close").addEventListener("click", function () {
+        diagOverlay.classList.remove("visible");
+      });
+      diagOverlay.addEventListener("click", function (e) {
+        if (e.target === diagOverlay) diagOverlay.classList.remove("visible");
+      });
+
+      document.getElementById("diag-run").addEventListener("click", async function () {
+        diagResults.innerHTML = "";
+        const addResult = (label, ok, detail) => {
+          const div = document.createElement("div");
+          div.className = "diag-result " + (ok ? "ok" : "fail");
+          div.textContent = label + (detail ? "\n" + detail : "");
+          diagResults.appendChild(div);
+        };
+
+        // Test 1: Worker erreichbar? (einfacher POST)
+        addResult("1/3  Teste Verbindung zum Server…", null, "(läuft)");
+        const lastResult = diagResults.lastChild;
+        const t1 = Date.now();
+        try {
+          const res = await fetchWithTimeout(WORKER_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json; charset=utf-8" },
+            body: JSON.stringify({ text: "Тест.", level: "B2" }),
+          }, 30000);
+          const ms = Date.now() - t1;
+          const json = await res.json();
+          lastResult.className = "diag-result ok";
+          lastResult.textContent = "1/3  Server erreichbar ✓  (" + ms + "ms)";
+        } catch (e) {
+          lastResult.className = "diag-result fail";
+          lastResult.textContent = "1/3  Server NICHT erreichbar ✗\n" + e.message;
+          addResult("Diagnose", false,
+            "Der Server ist vom Gerät nicht erreichbar.\n" +
+            "Wahrscheinliche Ursachen:\n" +
+            "• WLAN/Netzwerk blockiert die Anfrage\n" +
+            "• IPv6-Problem beim Provider\n" +
+            "• Cloudflare in diesem Netz gesperrt");
+          return;
+        }
+
+        // Test 2: GLM antwortet?
+        addResult("2/3  Teste KI-Antwort (B2)…", null, "(läuft, kann 30s dauern)");
+        const lastResult2 = diagResults.lastChild;
+        const t2 = Date.now();
+        try {
+          const res = await fetchWithTimeout(WORKER_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json; charset=utf-8" },
+            body: JSON.stringify({
+              text: "Анна Павловна кашляла несколько дней.",
+              level: "B2",
+            }),
+          }, 45000);
+          const json = await res.json();
+          const ms = Date.now() - t2;
+          if (json.error) throw new Error(json.error);
+          lastResult2.className = "diag-result ok";
+          lastResult2.textContent = "2/3  KI antwortet ✓  (" + ms + "ms)\n→ " + json.simplified.substring(0, 60);
+        } catch (e) {
+          lastResult2.className = "diag-result fail";
+          lastResult2.textContent = "2/3  KI-Antwort fehlgeschlagen ✗\n" + e.message;
+          return;
+        }
+
+        // Test 3: A2 (langsamstes Level)
+        addResult("3/3  Teste A2 (langsamstes Level)…", null, "(läuft)");
+        const lastResult3 = diagResults.lastChild;
+        const t3 = Date.now();
+        try {
+          const res = await fetchWithTimeout(WORKER_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json; charset=utf-8" },
+            body: JSON.stringify({
+              text: "Анна Павловна кашляла несколько дней.",
+              level: "A2",
+            }),
+          }, 45000);
+          const json = await res.json();
+          const ms = Date.now() - t3;
+          if (json.error) throw new Error(json.error);
+          lastResult3.className = "diag-result ok";
+          lastResult3.textContent = "3/3  A2 funktioniert ✓  (" + ms + "ms)\n→ " + json.simplified.substring(0, 60);
+          addResult("✅ Alles funktioniert!", true,
+            "Die Ad-hoc-Vereinfachung sollte laufen.\n" +
+            "Falls es trotzdem manchmal hakt, ist es\n" +
+            "eine temporäre Netzschwankung.");
+        } catch (e) {
+          lastResult3.className = "diag-result fail";
+          lastResult3.textContent = "3/3  A2 fehlgeschlagen ✗\n" + e.message;
+        }
+      });
+
+      // ─── Text-to-Speech ───
+      const ttsBtn = document.getElementById("tts-btn");
+      const ttsRate = document.getElementById("tts-rate");
+      const ttsRateVal = document.getElementById("tts-rate-val");
+      const ttsAutoplay = document.getElementById("tts-autoplay");
+      const ttsAutoplayLabel = document.getElementById("tts-autoplay-label");
+      let ttsSpeaking = false;
+      let ttsPaused = false;
+
+      // Verfügbare russische Stimme finden
+      let ruVoice = null;
+      function loadVoices() {
+        const voices = window.speechSynthesis.getVoices();
+        ruVoice = voices.find(function (v) { return v.lang === "ru-RU"; }) ||
+                 voices.find(function (v) { return v.lang && v.lang.startsWith("ru"); });
+      }
+      loadVoices();
+      if (window.speechSynthesis) {
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+      }
+
+      ttsRate.addEventListener("input", function () {
+        ttsRateVal.textContent = parseFloat(ttsRate.value).toFixed(2) + "×";
+      });
+
+      // Startet das Vorlesen für den aktuellen Chunk+Level.
+      // autoplay: true wenn durch Autoplay ausgelöst (unterdrückt Voice-Warnung)
+      function startTTS(autoplay) {
+        // Stimme ggf. neu laden (iOS lädt verzögert)
+        if (!ruVoice) loadVoices();
+
+        if (!ruVoice) {
+          if (!autoplay) {
+            alert(
+              "Keine russische Stimme gefunden!\n\n" +
+              "Bitte installieren:\n" +
+              "• Android: Einstellungen → Spracheingabe → TTS → Russisch\n" +
+              "• iPhone: Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen → Russisch"
+            );
+          }
+          return false;
+        }
+
+        const p = book.paragraphs[idx];
+        let text = p.original;
+        if (level !== "original" && p[level] && p[level].trim()) {
+          text = p[level];
+        }
+
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.lang = "ru-RU";
+        utter.voice = ruVoice;
+        utter.rate = parseFloat(ttsRate.value);
+        utter.volume = 1;
+        utter.pitch = 1;
+
+        utter.onend = function () {
+          ttsSpeaking = false;
+          ttsPaused = false;
+          ttsBtn.classList.remove("playing");
+          ttsBtn.textContent = "🔊";
+
+          // Autoplay: nächsten Chunk laden und vorlesen
+          if (ttsAutoplay.checked && idx < book.paragraphs.length - 1) {
+            setTimeout(function () {
+              go(1);
+              setTimeout(function () { startTTS(true); }, 300);
+            }, 500);
+          }
+        };
+        utter.onerror = function () {
+          ttsSpeaking = false;
+          ttsPaused = false;
+          ttsBtn.classList.remove("playing");
+          ttsBtn.textContent = "🔊";
+        };
+
+        window.speechSynthesis.speak(utter);
+        ttsSpeaking = true;
+        ttsPaused = false;
+        ttsBtn.classList.add("playing");
+        ttsBtn.textContent = "⏸";
+        return true;
+      }
+
+      function stopTTS() {
+        if (window.speechSynthesis) window.speechSynthesis.cancel();
+        ttsSpeaking = false;
+        ttsPaused = false;
+        ttsBtn.classList.remove("playing");
+        ttsBtn.textContent = "🔊";
+      }
+
+      ttsBtn.addEventListener("click", function () {
+        if (!window.speechSynthesis) {
+          alert("Sprachausgabe wird von diesem Browser nicht unterstützt.");
+          return;
+        }
+
+        // Wenn gerade spricht → pausieren/fortsetzen/stoppen
+        if (ttsSpeaking) {
+          if (ttsPaused) {
+            window.speechSynthesis.resume();
+            ttsPaused = false;
+            ttsBtn.textContent = "⏸";
+          } else {
+            window.speechSynthesis.pause();
+            ttsPaused = true;
+            ttsBtn.textContent = "▶";
+          }
+          return;
+        }
+
+        startTTS(false);
+      });
+
+      // Autoplay-Checkbox: visuelles Feedback
+      ttsAutoplay.addEventListener("change", function () {
+        ttsAutoplayLabel.classList.toggle("active", ttsAutoplay.checked);
+      });
+
+      // Beim Blättern oder Levelwechsel → Stimme stoppen
+      prevBtn.addEventListener("click", stopTTS);
+      nextBtn.addEventListener("click", stopTTS);
+      // setLevel um stopTTS erweitern
+
+      // Start
+      setLevel(level);
+      render();
+    })();
+  </script>
+</body>
+</html>
