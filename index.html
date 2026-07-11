@@ -234,7 +234,7 @@
 
   <script>
     (function () {
-      const VERSION = "2.1";
+      const VERSION = "2.2";
       const API = "https://easyreader2.st-schaab.workers.dev";
       const LEVELS = ["original", "C1", "B2", "B1", "A2"];
       const STORAGE_BOOK = "easyreader2.bookId";
@@ -423,10 +423,15 @@
         } else {
           const val = p[level];
           if (val && val.trim()) {
+            // Bereits geladen (Cache oder on-demand)
             textEl.className = "chunk-text";
             textEl.innerHTML = wrapWords(val);
-          } else {
+          } else if (p._loaded) {
+            // Chunk-Daten wurden schon geladen, Level aber leer → ad-hoc generieren
             renderAdHoc(p, level);
+          } else {
+            // Chunk-Vereinfachungen on-demand vom Server laden
+            loadChunkLevels(p);
           }
         }
 
@@ -435,6 +440,38 @@
           '<span class="ver">v' + VERSION + '</span>';
         prevBtn.disabled = idx === 0;
         nextBtn.disabled = idx === chunks.length - 1;
+      }
+
+      // Lädt die Vereinfachungen für einen Chunk on-demand vom Server
+      function loadChunkLevels(p) {
+        textEl.className = "placeholder";
+        textEl.innerHTML =
+          '<span class="icon" style="display:inline-block;animation:spin 1s linear infinite">⚙️</span>' +
+          'Lade Absatz…';
+
+        fetchWithTimeout(API + "/api/chunk/" + p.id, { headers: { "X-User-Id": userId } }, 15000)
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            if (data.error) throw new Error(data.error);
+            // Alle Levels in den Chunk-Cache schreiben
+            p.C1 = data.C1 || "";
+            p.B2 = data.B2 || "";
+            p.B1 = data.B1 || "";
+            p.A2 = data.A2 || "";
+            p._loaded = true;
+            // Neu rendern, falls wir noch auf diesem Chunk+Level sind
+            if (chunks[idx].id === p.id) render();
+          })
+          .catch(function (err) {
+            if (chunks[idx].id === p.id) {
+              textEl.className = "placeholder";
+              textEl.innerHTML =
+                '<span class="icon">⚠️</span>' +
+                'Fehler beim Laden.' +
+                '<br><span style="font-size:0.8rem;color:var(--muted-2)">' + (err.message || "") + '</span>' +
+                '<br><br><span style="font-size:0.75rem;color:var(--muted-2)">Nochmal tippen/blättern</span>';
+            }
+          });
       }
 
       function renderAdHoc(p, lvl) {

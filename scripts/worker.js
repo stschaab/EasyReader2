@@ -51,7 +51,9 @@ export default {
         return json({ books: r.results });
       }
 
-      // ─── Buch-Detail mit allen Chunks ───
+      // ─── Buch-Detail mit Chunks (nur Originaltext, ohne Vereinfachungen) ───
+      // Vereinfachungen werden on-demand pro Chunk geladen (siehe /api/chunk/:id)
+      // Sonst wird der Response zu gross und bricht ab.
       const bookMatch = path.match(/^\/api\/books\/(\d+)$/);
       if (bookMatch && request.method === "GET") {
         const bookId = parseInt(bookMatch[1], 10);
@@ -62,37 +64,48 @@ export default {
         if (!book) return json({ error: "Buch nicht gefunden" }, 404);
 
         const chunks = await env.DB.prepare(
-          `SELECT c.id, c.order_index, c.chapter_id, c.original_text, c.word_count,
-                  ch.volume, ch.part, ch.chapter_num,
-                  (SELECT GROUP_CONCAT(level || ':' || simplified_text, '||')
-                   FROM simplifications WHERE chunk_id = c.id) as sims
+          `SELECT c.id, c.order_index, c.original_text, c.word_count,
+                  ch.volume, ch.part, ch.chapter_num
            FROM chunks c LEFT JOIN chapters ch ON c.chapter_id = ch.id
            WHERE c.book_id = ? ORDER BY c.order_index`
         ).bind(bookId).all();
 
-        // Vereinfachungen als Objekt aufbereiten
-        const chunksOut = chunks.results.map((c) => {
-          const levels = {};
-          if (c.sims) {
-            for (const pair of c.sims.split("||")) {
-              const [lvl, ...rest] = pair.split(":");
-              levels[lvl] = rest.join(":");
-            }
-          }
-          return {
-            id: c.id,
-            order_index: c.order_index,
-            chapter: c.chapter_num ? "Т." + (c.volume || 1) + " · Ч." + (c.part || 1) + " · Гл. " + toRoman(c.chapter_num) : null,
-            original: c.original_text,
-            word_count: c.word_count,
-            C1: levels.C1 || "",
-            B2: levels.B2 || "",
-            B1: levels.B1 || "",
-            A2: levels.A2 || "",
-          };
-        });
+        const chunksOut = chunks.results.map((c) => ({
+          id: c.id,
+          order_index: c.order_index,
+          chapter: c.chapter_num ? "Т." + (c.volume || 1) + " · Ч." + (c.part || 1) + " · Гл. " + toRoman(c.chapter_num) : null,
+          original: c.original_text,
+          word_count: c.word_count,
+          C1: "", B2: "", B1: "", A2: "",  // leer, werden on-demand geladen
+        }));
 
         return json({ book, chunks: chunksOut });
+      }
+
+      // ─── Einzelner Chunk mit allen Vereinfachungen ───
+      const chunkMatch = path.match(/^\/api\/chunk\/(\d+)$/);
+      if (chunkMatch && request.method === "GET") {
+        const chunkId = parseInt(chunkMatch[1], 10);
+        const chunk = await env.DB.prepare(
+          `SELECT id, book_id, original_text FROM chunks WHERE id = ?`
+        ).bind(chunkId).first();
+        if (!chunk) return json({ error: "Chunk nicht gefunden" }, 404);
+
+        const sims = await env.DB.prepare(
+          `SELECT level, simplified_text FROM simplifications WHERE chunk_id = ?`
+        ).bind(chunkId).all();
+
+        const levels = {};
+        for (const s of sims.results) levels[s.level] = s.simplified_text;
+
+        return json({
+          id: chunk.id,
+          original: chunk.original_text,
+          C1: levels.C1 || "",
+          B2: levels.B2 || "",
+          B1: levels.B1 || "",
+          A2: levels.A2 || "",
+        });
       }
 
       // ─── RAG-Vereinfachung ───
