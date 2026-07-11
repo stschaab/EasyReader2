@@ -234,7 +234,7 @@
 
   <script>
     (function () {
-      const VERSION = "2.0";
+      const VERSION = "2.1";
       const API = "https://easyreader2.st-schaab.workers.dev";
       const LEVELS = ["original", "C1", "B2", "B1", "A2"];
       const STORAGE_BOOK = "easyreader2.bookId";
@@ -290,59 +290,90 @@
       }
 
       async function loadLibrary() {
-        const data = await apiGet("/api/books");
-        bookListEl.innerHTML = "";
-        if (!data.books || data.books.length === 0) {
-          bookListEl.innerHTML = '<div class="book-loading">Keine Bücher vorhanden.</div>';
-          return;
-        }
-        for (const b of data.books) {
-          const item = document.createElement("div");
-          item.className = "book-item";
-          item.innerHTML =
-            '<div class="cover">📖</div>' +
-            '<div class="info">' +
-            '<div class="t">' + b.title + '</div>' +
-            '<div class="a">' + (b.author || "") + '</div>' +
-            '<div class="meta">' + (b.lang || "").toUpperCase() + ' · ' + b.chunk_count + ' Absätze</div>' +
+        bookListEl.innerHTML = '<div class="book-loading">Lade Bibliothek…</div>';
+        try {
+          const res = await fetchWithTimeout(API + "/api/books", { headers: { "X-User-Id": userId } }, 10000);
+          const data = await res.json();
+          bookListEl.innerHTML = "";
+          if (!data.books || data.books.length === 0) {
+            bookListEl.innerHTML = '<div class="book-loading">Keine Bücher vorhanden.</div>';
+            return;
+          }
+          for (const b of data.books) {
+            const item = document.createElement("div");
+            item.className = "book-item";
+            item.innerHTML =
+              '<div class="cover">📖</div>' +
+              '<div class="info">' +
+              '<div class="t">' + b.title + '</div>' +
+              '<div class="a">' + (b.author || "") + '</div>' +
+              '<div class="meta">' + (b.lang || "").toUpperCase() + ' · ' + b.chunk_count + ' Absätze</div>' +
+              '</div>';
+            item.addEventListener("click", function () { openBook(b.id); });
+            bookListEl.appendChild(item);
+          }
+        } catch (e) {
+          bookListEl.innerHTML =
+            '<div class="book-loading">' +
+            '<p>⚠️ Server nicht erreichbar</p>' +
+            '<p style="font-size:0.8rem;margin-top:0.5rem">' + (e.message || "Netzwerkfehler") + '</p>' +
+            '<p style="font-size:0.75rem;margin-top:0.8rem">Evtl. IPv6/Netz-Problem. Am PC testen oder später erneut.</p>' +
+            '<button class="nav-btn" style="margin-top:1rem" onclick="location.reload()">Erneut versuchen</button>' +
             '</div>';
-          item.addEventListener("click", function () { openBook(b.id); });
-          bookListEl.appendChild(item);
         }
       }
 
       async function openBook(id) {
-        bookId = id;
-        localStorage.setItem(STORAGE_BOOK, id);
-        const data = await apiGet("/api/books/" + id);
-        if (data.error) { alert(data.error); return; }
-        book = data.book;
-        chunks = data.chunks;
+        // Loading-Zustand
+        bookListEl.style.opacity = "0.5";
+        bookListEl.style.pointerEvents = "none";
 
-        titleEl.textContent = book.title;
-        authorEl.textContent = book.author || "";
-        overlay.classList.add("hidden");
-        header.style.display = "";
-        levelsEl.style.display = "";
-        ttsBar.style.display = "";
-        mainFooter.style.display = "";
+        try {
+          const res = await fetchWithTimeout(API + "/api/books/" + id, { headers: { "X-User-Id": userId } }, 15000);
+          const data = await res.json();
+          if (data.error) { alert(data.error); bookListEl.style.opacity = ""; bookListEl.style.pointerEvents = ""; return; }
+          book = data.book;
+          chunks = data.chunks;
+          if (!chunks || chunks.length === 0) { alert("Buch hat keine Absätze."); return; }
 
-        levelsEl.innerHTML = "";
-        LEVELS.forEach(function (lvl) {
-          const b = document.createElement("button");
-          b.className = "lvl-btn";
-          b.dataset.lvl = lvl;
-          b.textContent = lvl === "original" ? "Original" : lvl;
-          b.addEventListener("click", function () { setLevel(lvl); });
-          levelsEl.appendChild(b);
-        });
+          bookId = id;
+          localStorage.setItem(STORAGE_BOOK, id);
 
-        const saved = await apiGet("/api/progress/" + id);
-        idx = Math.min(Math.max(saved.progress.chunk_index || 0, 0), chunks.length - 1);
-        const savedLvl = saved.progress.level;
-        level = LEVELS.includes(savedLvl) ? savedLvl : "original";
-        setLevel(level);
-        render();
+          titleEl.textContent = book.title;
+          authorEl.textContent = book.author || "";
+          overlay.classList.add("hidden");
+          header.style.display = "";
+          levelsEl.style.display = "";
+          ttsBar.style.display = "";
+          mainFooter.style.display = "";
+
+          levelsEl.innerHTML = "";
+          LEVELS.forEach(function (lvl) {
+            const b = document.createElement("button");
+            b.className = "lvl-btn";
+            b.dataset.lvl = lvl;
+            b.textContent = lvl === "original" ? "Original" : lvl;
+            b.addEventListener("click", function () { setLevel(lvl); });
+            levelsEl.appendChild(b);
+          });
+
+          // Progress laden (mit Fallback wenn schiefgeht)
+          idx = 0; level = "original";
+          try {
+            const saved = await apiGet("/api/progress/" + id);
+            if (saved.progress) {
+              idx = Math.min(Math.max(saved.progress.chunk_index || 0, 0), chunks.length - 1);
+              const savedLvl = saved.progress.level;
+              level = LEVELS.includes(savedLvl) ? savedLvl : "original";
+            }
+          } catch (e) { /* Progress-Laden optional */ }
+          setLevel(level);
+          render();
+        } catch (e) {
+          bookListEl.style.opacity = "";
+          bookListEl.style.pointerEvents = "";
+          alert("Buch konnte nicht geladen werden: " + (e.message || "Netzwerkfehler"));
+        }
       }
 
       libraryBtn.addEventListener("click", function () {
