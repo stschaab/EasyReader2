@@ -1,1 +1,18 @@
-{"books":[{"id":1,"title":"Война и мир","author":"Лев Толстой","lang":"ru","chunks":97}]}
+{
+  "books": [
+    {
+      "id": 1,
+      "title": "Война и мир",
+      "author": "Лев Толстой",
+      "lang": "ru",
+      "chunks": 97
+    },
+    {
+      "id": 2,
+      "title": "Zalacaín el Aventurero",
+      "author": "Pío Baroja",
+      "lang": "es",
+      "chunks": 626
+    }
+  ]
+}

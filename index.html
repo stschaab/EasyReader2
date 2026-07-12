@@ -236,9 +236,10 @@
 
   <script>
     (function () {
-      const VERSION = "4.0";
+      const VERSION = "5.0";
       const API = "https://easyreader2.st-schaab.workers.dev";
-      const LEVELS = ["original", "4000", "3000", "2000", "1000"];
+      let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
+      const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
       const STORAGE_BOOK = "easyreader2.bookId";
 
       let bookId = null, book = null, chunks = [], idx = 0, level = "original";
@@ -341,6 +342,13 @@
           chunks = data.chunks;
           if (!chunks || chunks.length === 0) { alert("Buch hat keine Absätze."); bookListEl.style.opacity = ""; bookListEl.style.pointerEvents = ""; return; }
 
+          // Level-Liste aus dem Buch übernehmen (neu: book.levels), sonst Default
+          if (book.levels && Array.isArray(book.levels) && book.levels.length > 0) {
+            LEVELS = book.levels;
+          } else {
+            LEVELS = ["original", "4000", "3000", "2000", "1000"];
+          }
+
           // Book-Liste wieder aktivieren (für späteren Bibliotheks-Besuch)
           bookListEl.style.opacity = "";
           bookListEl.style.pointerEvents = "";
@@ -361,7 +369,12 @@
             const b = document.createElement("button");
             b.className = "lvl-btn";
             b.dataset.lvl = lvl;
-            b.textContent = lvl === "original" ? "Original" : (lvl + " W.");
+            // Label: "Original" für original; CEFR-Level als reines Label; sonst "N W."
+            let label;
+            if (lvl === "original") label = "Original";
+            else if (CEFR_LEVELS.indexOf(lvl) >= 0) label = lvl;
+            else label = lvl + " W.";
+            b.textContent = label;
             b.addEventListener("click", function () { setLevel(lvl); });
             levelsEl.appendChild(b);
           });
@@ -564,14 +577,30 @@
       }
       function hidePopup() { dictPopup.classList.remove("visible"); }
       function stripTags(html) { const d = document.createElement("div"); d.innerHTML = html; return d.textContent || ""; }
-      function extractLemma(html) {
+      // Wiktionary-Sprachsektion dynamisch aus dem Buch (Default 'ru' für Abwärtskompatibilität)
+      function wiktLang() { return (book && book.wiktionary_lang) || "ru"; }
+      // Strip-Regex aus dem Buch ableiten: behalte genau die Zeichen, die in word_regex erlaubt sind.
+      // Wir bauen sie aus den Buchstaben-Klassen, die in word_regex vorkommen.
+      function keepCharRegex() {
+        // Statisch pro Sprache (schnell genug): wir übersetzen die wenigen bekannten Regexes.
+        const wr = (book && book.word_regex) || "";
+        if (/ÁÉÍÓÚÜáéíóúüÑñ/.test(wr)) return /[^A-Za-zÁÉÍÓÚÜáéíóúüÑñ]/g;  // Spanisch
+        return /[^А-Яа-яЁё]/g;  // Russisch (Default)
+      }
+      function extractLemma(html, lang) {
+        // „of <Wort>"-Pattern. Wort-Zeichenklasse hängt von der Sprache ab.
+        if (lang === "es") {
+          const m = html.match(/of\s+([A-Za-zÁÉÍÓÚÜáéíóúüÑñ]+)/);
+          return m ? m[1] : null;
+        }
         const m = html.match(/of\s+([А-Яа-яЁё][А-Яа-яЁё]*(?:́[А-Яа-яЁё]+)?)/);
         return m ? m[1] : null;
       }
       function stripAccents(w) { return w.replace(/\u0301/g, ""); }
 
       async function lookUp(word, x, y) {
-        word = word.trim().replace(/[^А-Яа-яЁё]/g, "");
+        const lang = wiktLang();
+        word = word.trim().replace(keepCharRegex(), "");
         if (!word || word.length < 2) return;
         showPopup('<div class="loading">Suche „' + word + '"…</div>', x, y);
         if (dictCache[word]) { renderDict(word, dictCache[word], x, y); return; }
@@ -580,9 +609,9 @@
           if (res.status === 404) { dictCache[word] = { notFound: true }; renderDict(word, dictCache[word], x, y); return; }
           if (!res.ok) throw new Error("HTTP " + res.status);
           const json = await res.json();
-          if (!json.ru || !json.ru.length) { dictCache[word] = { notFound: true }; renderDict(word, dictCache[word], x, y); return; }
-          const section = json.ru[0], def0 = section.definitions[0], defText = stripTags(def0.definition);
-          const lemma = extractLemma(defText);
+          if (!json[lang] || !json[lang].length) { dictCache[word] = { notFound: true }; renderDict(word, dictCache[word], x, y); return; }
+          const section = json[lang][0], def0 = section.definitions[0], defText = stripTags(def0.definition);
+          const lemma = extractLemma(defText, lang);
           let gloss = defText, displayLemma = word;
           if (lemma && lemma !== word) {
             displayLemma = lemma;
@@ -591,7 +620,7 @@
               const res2 = await fetch("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(lemmaClean));
               if (res2.ok) {
                 const j2 = await res2.json();
-                if (j2.ru && j2.ru[0] && j2.ru[0].definitions[0]) gloss = stripTags(j2.ru[0].definitions[0].definition);
+                if (j2[lang] && j2[lang][0] && j2[lang][0].definitions[0]) gloss = stripTags(j2[lang][0].definitions[0].definition);
               }
             } catch (e) {}
           }
