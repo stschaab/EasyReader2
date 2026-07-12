@@ -236,7 +236,7 @@
 
   <script>
     (function () {
-      const VERSION = "5.0";
+      const VERSION = "5.1";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -369,9 +369,10 @@
             const b = document.createElement("button");
             b.className = "lvl-btn";
             b.dataset.lvl = lvl;
-            // Label: "Original" für original; CEFR-Level als reines Label; sonst "N W."
+            // Label: "Original" für original; CEFR-Level oder EN als reines Label; sonst "N W."
             let label;
             if (lvl === "original") label = "Original";
+            else if (lvl === "EN") label = "EN";
             else if (CEFR_LEVELS.indexOf(lvl) >= 0) label = lvl;
             else label = lvl + " W.";
             b.textContent = label;
@@ -455,6 +456,16 @@
         if (level === "original") {
           textEl.className = "chunk-text";
           textEl.innerHTML = wrapWords(p.original);
+        } else if (level === "EN") {
+          // Englische Übersetzung: als Klartext ohne anklickbare Wörter (kein Wörterbuch auf EN)
+          const val = p.EN;
+          if (val && val.trim()) {
+            textEl.className = "chunk-text";
+            textEl.textContent = val;  // textContent = kein HTML, keine Wraps
+          } else {
+            textEl.className = "placeholder";
+            textEl.innerHTML = '<span class="icon">📖</span>Übersetzung noch nicht generiert.<br><span style="font-size:0.8rem;color:var(--muted-2)">Für diesen Absatz ist nur Original / A2 verfügbar.</span>';
+          }
         } else {
           const val = p[level];
           if (val && val.trim()) {
@@ -673,6 +684,12 @@
           return false;
         }
         const p = chunks[idx];
+        // TTS bei EN-Übersetzung überspringen: englischer Text in spanischer Stimme ergibt keinen Sinn,
+        // und wir können keine englische Stimme garantieren.
+        if (level === "EN") {
+          if (!autoplay) alert("Vorlesen ist nur für Original und A2 verfügbar, nicht für die englische Übersetzung.");
+          return false;
+        }
         let text = p.original;
         if (level !== "original" && p[level] && p[level].trim()) text = p[level];
         // Marker ([∞], [C2], [>C2] etc.) vor dem Vorlesen entfernen,
