@@ -6,6 +6,7 @@
 //   POST /api/simplify            – RAG-Vereinfachung { chunk_id, level }
 //   POST /api/progress            – Lesefortschritt speichern
 //   GET  /api/progress/:bookId    – Lesefortschritt laden
+//   POST /api/admin/words         – Kelly-Wortlisten-Import (X-Admin-Key geschützt)
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -38,6 +39,39 @@ export default {
       // ─── Health ───
       if (path === "/" && request.method === "GET") {
         return json({ status: "EasyReader2 API", db: !!env.DB, glm: !!env.GLM_API_KEY });
+      }
+
+      // ─── Diagnose: Hard-Words für einen Chunk anzeigen (ohne GLM) ───
+      if (path === "/api/debug/hardwords" && request.method === "POST") {
+        const { chunk_id, level } = await request.json();
+        const targetRank = CEFR_RANK[level || "B1"];
+        const chunk = await env.DB.prepare(
+          `SELECT c.*, b.language_id FROM chunks c JOIN books b ON c.book_id = b.id WHERE c.id = ?`
+        ).bind(chunk_id).first();
+        if (!chunk) return json({ error: "Chunk nicht gefunden" }, 404);
+        const tokens = [...new Set((chunk.original_text.match(new RegExp("[А-Яа-яЁё]+", "g")) || []).map(t => t.toLowerCase()))].slice(0, 100);
+        // Lemmata über word_forms-Tabelle nachschlagen (vorab generiert)
+        let lookupTokens = tokens;
+        const wfCheck = await env.DB.prepare(`SELECT COUNT(*) c FROM word_forms`).first();
+        if (wfCheck.c > 0) {
+          const ph = tokens.map(() => "?").join(",");
+          const wf = await env.DB.prepare(
+            `SELECT word_form, lemma FROM word_forms WHERE word_form IN (${ph})`
+          ).bind(...tokens).all();
+          const formToLemma = {};
+          for (const r2 of wf.results) formToLemma[r2.word_form] = r2.lemma;
+          lookupTokens = [...new Set(tokens.map(t => formToLemma[t] || t))];
+        }
+        const placeholders = lookupTokens.map(() => "?").join(",");
+        const r = await env.DB.prepare(
+          `SELECT lemma, cefr_level FROM words WHERE language_id = ? AND lemma IN (${placeholders}) AND cefr_level IS NOT NULL`
+        ).bind(chunk.language_id, ...lookupTokens).all();
+        const hardWords = r.results
+          .filter(w => CEFR_RANK[w.cefr_level] && CEFR_RANK[w.cefr_level] > targetRank)
+          .sort((a, b) => CEFR_RANK[b.cefr_level] - CEFR_RANK[a.cefr_level])
+          .map(w => ({ word: w.lemma, level: w.cefr_level }));
+        const knownWords = r.results.filter(w => CEFR_RANK[w.cefr_level] && CEFR_RANK[w.cefr_level] <= targetRank).length;
+        return json({ chunk_id, level, target_rank: targetRank, tokens_total: tokens.length, lemmas_total: lookupTokens.length, known_words: knownWords, hard_words: hardWords, hard_count: hardWords.length });
       }
 
       // ─── Bücher-Liste ───
@@ -119,41 +153,69 @@ export default {
         if (cached) return json({ simplified: cached.simplified_text, source: "cache" });
 
         // 3. Hard words für RAG bestimmen
-        // Alle Wörter im Chunk gegen die Wortliste prüfen
         const targetRank = CEFR_RANK[level];
         const wordRegex = new RegExp("[А-Яа-яЁё]+", "g");
         const tokens = chunk.original_text.match(wordRegex) || [];
-        const uniqueTokens = [...new Set(tokens.map((t) => t.toLowerCase()))];
+        const uniqueTokens = [...new Set(tokens.map((t) => t.toLowerCase()))].slice(0, 100);
 
+        // 3a. Lemmata-Lookup: flektierte Formen → Grundformen via D1-Tabelle
+        // (word_forms wird vorab per Batch-Job aus Kelly-Lemmata generiert, s. build_wordforms.js)
+        // Fallback: wenn word_forms leer, nutze originale Tokens (Abwärtskompatibilität)
+        let lookupTokens = uniqueTokens;
+        const wfCheck = await env.DB.prepare(
+          `SELECT COUNT(*) c FROM word_forms`
+        ).first();
+        if (wfCheck.c > 0) {
+          // Für jeden Token das Lemma nachschlagen
+          const ph = uniqueTokens.map(() => "?").join(",");
+          const wf = await env.DB.prepare(
+            `SELECT word_form, lemma FROM word_forms WHERE word_form IN (${ph})`
+          ).bind(...uniqueTokens).all();
+          const formToLemma = {};
+          for (const r of wf.results) formToLemma[r.word_form] = r.lemma;
+          lookupTokens = [...new Set(
+            uniqueTokens.map(t => formToLemma[t] || t)
+          )];
+        }
+
+        // 3b. Batch-Query: Lemmata gegen Kelly-Wortliste
         const hardWords = [];
-        for (const token of uniqueTokens.slice(0, 40)) {
-          const word = await env.DB.prepare(
-            `SELECT lemma, cefr_level FROM words WHERE language_id = ? AND lemma = ?`
-          ).bind(chunk.language_id, token).first();
-          if (word && CEFR_RANK[word.cefr_level] > targetRank) {
-            hardWords.push({ word: word.lemma, level: word.cefr_level });
+        if (lookupTokens.length > 0) {
+          const placeholders = lookupTokens.map(() => "?").join(",");
+          const r = await env.DB.prepare(
+            `SELECT lemma, cefr_level FROM words
+             WHERE language_id = ? AND lemma IN (${placeholders})
+             AND cefr_level IS NOT NULL`
+          ).bind(chunk.language_id, ...lookupTokens).all();
+          for (const w of r.results) {
+            if (CEFR_RANK[w.cefr_level] && CEFR_RANK[w.cefr_level] > targetRank) {
+              hardWords.push({ word: w.lemma, level: w.cefr_level });
+            }
           }
         }
 
         // 4. Prompt bauen
         const prompt = buildPrompt(chunk.original_text, level, hardWords);
 
-        // 5. GLM aufrufen (mit Retry bei Rate-Limit)
+        // 5. GLM aufrufen über Coding-Plan (Anthropic-Endpunkt, nicht api.z.ai!)
+        // Coding Plan greift nur über open.bigmodel.cn/api/anthropic (siehe Zhipu FAQ).
         let simplified = null;
         let lastError = null;
-        for (let attempt = 0; attempt < 2; attempt++) {
+        for (let attempt = 0; attempt < 3; attempt++) {
           if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
           try {
-            const glmRes = await fetch("https://api.z.ai/api/paas/v4/chat/completions", {
+            const glmRes = await fetch("https://open.bigmodel.cn/api/anthropic/v1/messages", {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Authorization: "Bearer " + env.GLM_API_KEY,
+                "x-api-key": env.GLM_API_KEY,
+                "anthropic-version": "2023-06-01",
               },
               body: JSON.stringify({
-                model: "glm-4.5-flash",
+                model: "glm-4.6",
+                max_tokens: 2000,
+                system: prompt.system,
                 messages: [
-                  { role: "system", content: prompt.system },
                   { role: "user", content: prompt.user },
                 ],
                 temperature: 0.3,
@@ -161,7 +223,26 @@ export default {
             });
             if (glmRes.ok) {
               const glmData = await glmRes.json();
-              simplified = glmData.choices[0].message.content.trim();
+              // Anthropic-Format: content ist Array von {type:"text", text:"..."}
+              const contentParts = glmData.content || [];
+              let candidate = contentParts
+                .filter((p) => p.type === "text")
+                .map((p) => p.text)
+                .join("")
+                .trim();
+              // Validierung: keine CJK-Zeichen, keine längeren lateinischen Sequenzen
+              // (GLM verliert gelegentlich die Sprache → chinesische/englische Ausreißer)
+              const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(candidate);
+              if (hasCJK) {
+                lastError = "CJK-Zeichen in Ausgabe (Sprache verloren)";
+                if (attempt > 0) {
+                  // beim letzten Versuch trotzdem nehmen (besser als nichts)
+                  simplified = candidate;
+                  break;
+                }
+                continue; // retry
+              }
+              simplified = candidate;
               break;
             }
             const errText = await glmRes.text();
@@ -179,10 +260,212 @@ export default {
         // 6. In DB speichern (Cache für下次)
         await env.DB.prepare(
           `INSERT OR REPLACE INTO simplifications (chunk_id, level, simplified_text, method, model)
-           VALUES (?, ?, ?, 'rag', 'glm-4.5-flash')`
+           VALUES (?, ?, ?, 'rag', 'glm-4.6')`
         ).bind(chunk_id, level, simplified).run();
 
         return json({ simplified, source: "rag", hard_words: hardWords.length });
+      }
+
+      // ─── Admin: Simplifikationen direkt einfügen (Batch, für Offline-Generierung) ───
+      if (path === "/api/admin/insert-simplifications" && request.method === "POST") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const { items } = await request.json();
+        if (!Array.isArray(items)) return json({ error: "items-Array erforderlich" }, 400);
+        let inserted = 0;
+        let errors = 0;
+        for (const it of items) {
+          try {
+            if (!it.chunk_id || !it.level || !it.simplified_text) { errors++; continue; }
+            await env.DB.prepare(
+              `INSERT OR REPLACE INTO simplifications (chunk_id, level, simplified_text, method, model)
+               VALUES (?, ?, ?, ?, ?)`
+            ).bind(it.chunk_id, it.level, it.simplified_text, it.method || "offline", it.model || "glm-5.2").run();
+            inserted++;
+          } catch (e) { errors++; }
+        }
+        return json({ ok: true, inserted, errors, total: items.length });
+      }
+
+      // ─── Admin: Simplifikations-Cache löschen (für RAG-Regenerierung) ───
+      if (path === "/api/admin/clearcache" && request.method === "POST") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const { chunk_id, level } = await request.json();
+        if (chunk_id && level) {
+          const r = await env.DB.prepare(
+            `DELETE FROM simplifications WHERE chunk_id = ? AND level = ?`
+          ).bind(chunk_id, level).run();
+          return json({ ok: true, deleted: r.meta?.changes || 0 });
+        }
+        if (chunk_id && !level) {
+          const r = await env.DB.prepare(
+            `DELETE FROM simplifications WHERE chunk_id = ?`
+          ).bind(chunk_id).run();
+          return json({ ok: true, deleted: r.meta?.changes || 0 });
+        }
+        return json({ error: "chunk_id erforderlich" }, 400);
+      }
+
+      // ─── Admin: Chunks für ein Buch neu aufbauen (Re-Chunking) ───
+      if (path === "/api/admin/rebuild-chunks" && request.method === "POST") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const body = await request.json();
+        const { book_id, action, chunks } = body;
+        if (!book_id) return json({ error: "book_id erforderlich" }, 400);
+
+        // action=reset: alle Chunks + Simplifikationen des Buches löschen
+        if (action === "reset") {
+          const d1 = await env.DB.prepare(
+            `DELETE FROM simplifications WHERE chunk_id IN (SELECT id FROM chunks WHERE book_id = ?)`
+          ).bind(book_id).run();
+          const d2 = await env.DB.prepare(
+            `DELETE FROM chunks WHERE book_id = ?`
+          ).bind(book_id).run();
+          return json({ ok: true, deleted_simplifications: d1.meta?.changes || 0, deleted_chunks: d2.meta?.changes || 0 });
+        }
+
+        // action=insert: neue Chunks einfügen (Batch)
+        if (action === "insert" && Array.isArray(chunks)) {
+          let inserted = 0;
+          let errors = 0;
+          for (const c of chunks) {
+            try {
+              // chapter_id aus chapter_num ableiten (1 → chapter 1, 2 → chapter 2)
+              const chapterId = c.chapter_num || 1;
+              await env.DB.prepare(
+                `INSERT INTO chunks (book_id, chapter_id, order_index, original_text, word_count)
+                 VALUES (?, ?, ?, ?, ?)`
+              ).bind(book_id, chapterId, c.order_index, c.original_text, c.word_count).run();
+              inserted++;
+            } catch (e) {
+              errors++;
+            }
+          }
+          return json({ ok: true, inserted, errors, total: chunks.length });
+        }
+
+        // action=status
+        if (action === "status") {
+          const cnt = await env.DB.prepare(
+            `SELECT COUNT(*) c FROM chunks WHERE book_id = ?`
+          ).bind(book_id).first();
+          const sims = await env.DB.prepare(
+            `SELECT COUNT(*) c FROM simplifications WHERE chunk_id IN (SELECT id FROM chunks WHERE book_id = ?)`
+          ).bind(book_id).first();
+          return json({ chunks: cnt.c, simplifications: sims.c });
+        }
+
+        return json({ error: "unbekannte action" }, 400);
+      }
+
+      // ─── Admin: word_forms-Tabelle verwalten (Flexionsformen → Lemma) ───
+      if (path === "/api/admin/wordforms" && request.method === "POST") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const { action, forms } = await request.json();
+
+        if (action === "create") {
+          await env.DB.prepare(
+            `CREATE TABLE IF NOT EXISTS word_forms (
+              word_form TEXT NOT NULL,
+              lemma TEXT NOT NULL,
+              cefr_level TEXT,
+              PRIMARY KEY (word_form, lemma)
+            )`
+          ).run();
+          await env.DB.prepare(
+            `CREATE INDEX IF NOT EXISTS idx_word_forms ON word_forms(word_form)`
+          ).run();
+          return json({ ok: true });
+        }
+
+        if (action === "reset") {
+          await env.DB.prepare(`DELETE FROM word_forms`).run();
+          return json({ ok: true });
+        }
+
+        if (action === "insert" && Array.isArray(forms)) {
+          let inserted = 0;
+          const BATCH = 25;
+          for (let i = 0; i < forms.length; i += BATCH) {
+            const batch = forms.slice(i, i + BATCH);
+            try {
+              const placeholders = batch.map(() => "(?,?,?)").join(",");
+              const flat = [];
+              for (const f of batch) flat.push(f.word_form, f.lemma, f.cefr_level || null);
+              await env.DB.prepare(
+                `INSERT OR IGNORE INTO word_forms (word_form, lemma, cefr_level) VALUES ${placeholders}`
+              ).bind(...flat).run();
+              inserted += batch.length;
+            } catch (e) { /* Batch-Fehler überspringen */ }
+          }
+          return json({ ok: true, inserted, total: forms.length });
+        }
+
+        if (action === "status") {
+          const cnt = await env.DB.prepare(`SELECT COUNT(*) c FROM word_forms`).first();
+          return json({ total: cnt ? cnt.c : 0 });
+        }
+
+        return json({ error: "unbekannte action" }, 400);
+      }
+
+      // ─── Admin: Wortliste laden (Kelly-Import) ───
+      if (path === "/api/admin/words" && request.method === "POST") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+
+        const body = await request.json();
+        const { action, language_id, words } = body;
+        if (!language_id) return json({ error: "language_id erforderlich" }, 400);
+
+        // Phase 1: Alle Wörter der Sprache löschen (sauberer Reset)
+        if (action === "reset") {
+          const r = await env.DB.prepare(
+            `DELETE FROM words WHERE language_id = ?`
+          ).bind(language_id).run();
+          return json({ ok: true, deleted: r.meta?.changes || 0 });
+        }
+
+        // Phase 2: Batch-INSERT (Wörter Array: [{lemma, rank, cefr}, ...])
+        if (action === "insert" && Array.isArray(words)) {
+          let inserted = 0;
+          let errors = 0;
+          // In Sub-Batches à 25 (3 Spalten × 25 = 75 Variablen, sicher)
+          const BATCH = 25;
+          for (let i = 0; i < words.length; i += BATCH) {
+            const batch = words.slice(i, i + BATCH);
+            try {
+              const placeholders = batch.map(() => "(?, ?, ?, ?)").join(",");
+              const flat = [];
+              for (const w of batch) {
+                flat.push(language_id, w.lemma, w.rank, w.cefr);
+              }
+              await env.DB.prepare(
+                `INSERT OR IGNORE INTO words (language_id, lemma, rank, cefr_level) VALUES ${placeholders}`
+              ).bind(...flat).run();
+              inserted += batch.length;
+            } catch (e) {
+              errors++;
+            }
+          }
+          return json({ ok: true, inserted, errors, total: words.length });
+        }
+
+        // Phase 3: Status (Verteilung)
+        if (action === "status") {
+          const cnt = await env.DB.prepare(
+            `SELECT COUNT(*) c FROM words WHERE language_id = ?`
+          ).bind(language_id).first();
+          const dist = await env.DB.prepare(
+            `SELECT cefr_level, COUNT(*) c FROM words WHERE language_id = ? GROUP BY cefr_level ORDER BY cefr_level`
+          ).bind(language_id).all();
+          return json({ total: cnt.c, distribution: dist.results });
+        }
+
+        return json({ error: "unbekannte action" }, 400);
       }
 
       // ─── Lesefortschritt speichern ───
@@ -231,29 +514,62 @@ function toRoman(num) {
   return result;
 }
 
-// RAG-Prompt bauen
+// RAG-Prompt bauen (v2 — dreistufiges Annotationssystem, bedeutungserhaltend)
 function buildPrompt(text, level, hardWords) {
   const levelGuide = {
     C1: "C1 (advanced): Keep literary style, smooth nested sentences only slightly. Modern spelling.",
     B2: "B2 (intermediate): Break nested sentences into shorter ones. Replace rare words with common ones.",
-    B1: "B1 (lower intermediate): Short simple sentences. Replace rare words with basic vocabulary.",
+    B1: "B1 (lower intermediate): Short simple sentences. Use basic vocabulary where possible.",
     A2: "A2 (elementary): Very simple sentences and basic vocabulary. Keep core meaning only.",
   };
   const guide = levelGuide[level] || levelGuide.B2;
 
+  // Hard-Word-Liste als GUIDE (nicht als Befehl), nach CEFR absteigend sortiert
   let hardWordsSection = "";
   if (hardWords.length > 0) {
-    const list = hardWords.map((w) => `- ${w.word} (${w.level})`).join("\n");
-    hardWordsSection = `\n\nThese words are ABOVE ${level} and MUST be replaced with simpler equivalents:\n${list}\n`;
+    const sorted = [...hardWords].sort(
+      (a, b) => (CEFR_RANK[b.level] || 0) - (CEFR_RANK[a.level] || 0)
+    );
+    const list = sorted.map((w) => `- ${w.word} (${w.level})`).join("\n");
+    hardWordsSection =
+      `\n\nWords in this text that the Kelly dictionary tags ABOVE ${level} ` +
+      `(use these as a GUIDE to spot difficulty, NOT as a command to replace):\n${list}\n`;
   }
 
   return {
     system:
       "You are an expert in Russian language and literature. " +
-      "Your task is to SIMPLIFY Russian literary texts for German-speaking Russian learners. " +
-      "CRITICAL: Your output MUST be in RUSSIAN only. Never translate to German or any other language. " +
-      "Return ONLY the simplified Russian text, no explanations, no quotes, no introduction.",
+      "Your task is to SIMPLIFY Russian literary texts for German-speaking Russian learners, " +
+      "while PRESERVING the exact meaning, historical accuracy, and social roles of all " +
+      "characters and their titles.\n\n" +
+      "The CEFR levels come from the Kelly project frequency dictionary (A1–C2 labels). " +
+      "Use these levels as a GUIDE to spot potentially difficult words — NOT as a command " +
+      "to replace them. A word's frequency in modern Russian does not determine whether " +
+      "it can be replaced: meaning always wins over simplicity.\n\n" +
+      "CRITICAL RULES:\n" +
+      "- Your output MUST be in RUSSIAN only. Never translate to German or any other language.\n" +
+      "- NEVER change the meaning. A simplification that alters meaning is a FAILURE.\n" +
+      "- Return ONLY the simplified Russian text, no explanations, no introduction, no quotes.",
     user:
-      `Simplify this Russian text to level ${level} (CEFR).\n\nRules:\n- ${guide}\n- Keep proper names (people, places)\n- Output MUST be in Russian\n- Return ONLY the simplified Russian text${hardWordsSection}\n\nText:\n${text}`,
+      `Simplify this Russian text to level ${level} (CEFR).\n\n` +
+      `Style guide:\n- ${guide}\n\n` +
+      `How to handle difficult words:\n` +
+      `1. REPLACE a word if a true modern synonym with IDENTICAL meaning exists. ` +
+      `This is the preferred action, especially for archaic everyday words ` +
+      `(e.g. ибо → потому что, ежели → если, дабы → чтобы, зело → очень).\n` +
+      `2. If no identical-meaning synonym exists AND the word is in the flag list below ` +
+      `(it has a known Kelly level X), KEEP the original word and append [X] in square ` +
+      `brackets — for example: князь [C2]. This signals "difficult, you may look it up."\n` +
+      `3. If no identical-meaning synonym exists AND the word is NOT in the flag list ` +
+      `(Kelly does not know it — very rare, archaic, or literary), KEEP the word and ` +
+      `append [>C2] — for example: редчайше [>C2]. This signals "so rare it is not in the dictionary."\n\n` +
+      `NEVER replace titles, ranks (князь, граф, император, государь...), proper names, ` +
+      `or terms central to the story — even if they are rare today, they carry meaning ` +
+      `that must not be lost. Mark them with [X] or [>C2] instead of replacing them.\n\n` +
+      `General rules:\n` +
+      `- Keep proper names (people, places)\n` +
+      `- Output MUST be in Russian\n` +
+      `- Return ONLY the simplified Russian text${hardWordsSection}\n\n` +
+      `Text:\n${text}`,
   };
 }

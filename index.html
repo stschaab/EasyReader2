@@ -236,9 +236,9 @@
 
   <script>
     (function () {
-      const VERSION = "3.1";
+      const VERSION = "4.0";
       const API = "https://easyreader2.st-schaab.workers.dev";
-      const LEVELS = ["original", "C1", "B2", "B1", "A2"];
+      const LEVELS = ["original", "4000", "3000", "2000", "1000"];
       const STORAGE_BOOK = "easyreader2.bookId";
 
       let bookId = null, book = null, chunks = [], idx = 0, level = "original";
@@ -361,7 +361,7 @@
             const b = document.createElement("button");
             b.className = "lvl-btn";
             b.dataset.lvl = lvl;
-            b.textContent = lvl === "original" ? "Original" : lvl;
+            b.textContent = lvl === "original" ? "Original" : (lvl + " W.");
             b.addEventListener("click", function () { setLevel(lvl); });
             levelsEl.appendChild(b);
           });
@@ -646,6 +646,9 @@
         const p = chunks[idx];
         let text = p.original;
         if (level !== "original" && p[level] && p[level].trim()) text = p[level];
+        // Marker ([∞], [C2], [>C2] etc.) vor dem Vorlesen entfernen,
+        // sonst liest die Stimme "eckige Klammer" vor
+        text = text.replace(/\s\[(?:∞|[ABC][12]|>C2)\]/g, "");
         const utter = new SpeechSynthesisUtterance(text);
         utter.lang = book ? book.tts_lang : "ru-RU";
         utter.voice = ttsVoice;

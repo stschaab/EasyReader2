@@ -121,38 +121,82 @@ function extractChapters(html) {
   return chapters;
 }
 
-// Teilt Text in Chunks von ~MAX_WORDS_PER_CHUNK Wörtern
-// versucht, an Satzenden zu trennen – schneidet NIE mitten im Satz ab
+// Teilt Text in Chunks von ~TARGET_CHARS Zeichen
+// Zeichenbasiert (sprachneutral, funktioniert auch für Chinesisch später).
+// Priorität 1: Trennung an Satzenden (.!?…»)
+// Priorität 2: Bei Sätzen > SOFT_LIMIT zusätzlich an Kommas/Semikolons/Doppelpunkten
+//              (um Tolstois lange Schachtelsätze aufzubrechen)
+// Hard-Limit: Absoluter Schutz, danach Notfalltrennung.
 function chunkText(text) {
-  const words = text.split(/\s+/);
-  const chunks = [];
-  let current = [];
-  let currentLen = 0;
-  const HARD_LIMIT = 75; // absolut: danach notfalls mitten im Satz (Schutz)
+  const TARGET = 220;     // Zielgröße in Zeichen
+  const MIN = 150;        // Mindestlänge — kein Cut bei zu kurzem Chunk
+  const HARD_LIMIT = 280; // bei Überschreitung: an Komma trennen wenn möglich
+  const SOFT_LIMIT = 240; // ab hier: auch Komma-Trennung zulassen
 
-  for (const word of words) {
-    current.push(word);
-    currentLen++;
-    const endsSentence = /[.!?…»]$/.test(word);
-    // Ab Mindestlänge UND Satzende: sauber trennen
-    if (currentLen >= 30 && endsSentence) {
-      chunks.push(current.join(" "));
-      current = [];
-      currentLen = 0;
+  const chunks = [];
+  let current = "";
+
+  // Satzgrenzen: . ! ? …  (ggf. gefolgt von schließendem Anführungszeichen)
+  const sentenceEnd = /([.!?…]+[»"]?\s+)/g;
+  const sentences = text.split(sentenceEnd);
+
+  // split mit Capture-Group liefert abwechselnd Satz + Trenner; mergen
+  const merged = [];
+  for (let i = 0; i < sentences.length; i += 2) {
+    const s = sentences[i] || "";
+    const sep = sentences[i + 1] || "";
+    merged.push(s + sep);
+  }
+
+  // Einen (potentiell sehr langen) Satz an Kommas/Semikolons/Doppelpunkten aufteilen
+  function splitLongSentence(sent) {
+    // Nebensatz-Grenzen: , ; : —  (gefolgt von Leerzeichen)
+    const subEnd = /([,;:—]+\s+)/g;
+    const parts = sent.split(subEnd);
+    const subMerged = [];
+    for (let i = 0; i < parts.length; i += 2) {
+      const s = parts[i] || "";
+      const sep = parts[i + 1] || "";
+      subMerged.push(s + sep);
     }
-    // Hard limit: weiter bis Satzende, aber spätestens bei HARD_LIMIT
-    else if (currentLen >= MAX_WORDS_PER_CHUNK && endsSentence) {
-      chunks.push(current.join(" "));
-      current = [];
-      currentLen = 0;
-    } else if (currentLen >= HARD_LIMIT) {
-      // Notfall: sehr langer Satz, hier trennen
-      chunks.push(current.join(" "));
-      current = [];
-      currentLen = 0;
+    return subMerged;
+  }
+
+  for (const sentence of merged) {
+    if (!sentence.trim()) continue;
+
+    // Wenn der Satz selbst schon über HARD_LIMIT: in Teilsätze zerlegen
+    if (sentence.length > HARD_LIMIT) {
+      // erst aktuellen Chunk abschließen
+      if (current.trim()) { chunks.push(current.trim()); current = ""; }
+      const subs = splitLongSentence(sentence);
+      for (const sub of subs) {
+        if (!sub.trim()) continue;
+        if (current.length >= MIN && (current + sub).length > TARGET) {
+          chunks.push(current.trim());
+          current = "";
+        }
+        current += sub;
+        if (current.length >= HARD_LIMIT) {
+          chunks.push(current.trim());
+          current = "";
+        }
+      }
+      continue;
+    }
+
+    // Normalfall: Satz passt in einen Chunk
+    if (current.length >= MIN && (current + sentence).length > TARGET) {
+      chunks.push(current.trim());
+      current = "";
+    }
+    current += sentence;
+    if (current.length >= HARD_LIMIT) {
+      chunks.push(current.trim());
+      current = "";
     }
   }
-  if (current.length > 0) chunks.push(current.join(" "));
+  if (current.trim()) chunks.push(current.trim());
   return chunks;
 }
 
