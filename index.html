@@ -362,7 +362,7 @@
 
   <script>
     (function () {
-      const VERSION = "6.2";
+      const VERSION = "6.3";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1186,11 +1186,21 @@
       function loadVoices() {
         const ttsLang = book ? book.tts_lang : "ru-RU";
         const voices = window.speechSynthesis.getVoices();
+        // Bevorzugt: exakte Sprache (z.B. de-DE), sonst Sprachpräfix (z.B. de-AT)
+        // Sprachpräfix-Match: schließt Varianten ein, verhindert Fallback auf andere Sprachen
         ttsVoice = voices.find(function (v) { return v.lang === ttsLang; }) ||
                    voices.find(function (v) { return v.lang && v.lang.startsWith(ttsLang.split("-")[0]); });
       }
       loadVoices();
       if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = loadVoices;
+      // Chrome-Bug: getVoices() liefert beim App-Start oft ein leeres Array,
+      // und onvoiceschanged feuert nicht zuverlässig. Wir pollen mehrfach.
+      let voicePollTries = 0;
+      const voicePoll = setInterval(function () {
+        if (ttsVoice || voicePollTries >= 10) { clearInterval(voicePoll); return; }
+        loadVoices();
+        voicePollTries++;
+      }, 300);
 
       ttsRate.addEventListener("input", function () { ttsRateVal.textContent = parseFloat(ttsRate.value).toFixed(2) + "×"; });
       ttsAutoplay.addEventListener("change", function () { ttsAutoplayLabel.classList.toggle("active", ttsAutoplay.checked); });
@@ -1198,7 +1208,28 @@
       function startTTS(autoplay) {
         if (!ttsVoice) loadVoices();
         if (!ttsVoice) {
-          if (!autoplay) alert("Keine " + (book ? book.tts_lang : "russische") + " Stimme gefunden!");
+          // Detaillierte Diagnose: welche Stimmen hat der Browser überhaupt?
+          if (!autoplay) {
+            const voices = window.speechSynthesis.getVoices();
+            const ttsLang = book ? book.tts_lang : "ru-RU";
+            const langPrefix = ttsLang.split("-")[0];
+            const matching = voices.filter(v => v.lang && v.lang.startsWith(langPrefix));
+            let msg = "Keine „" + ttsLang + "“ Stimme gefunden.\n\n";
+            msg += "Gefundene Stimmen gesamt: " + voices.length + "\n";
+            msg += "Davon „" + langPrefix + "“: " + matching.length + "\n\n";
+            if (voices.length === 0) {
+              msg += "Der Browser hat GAR KEINE Stimmen geladen.\n";
+              msg += "→ Häufiger Chrome-Bug: bitte Lade die Seite neu (Strg+F5) und versuche es gleich nochmal.\n";
+              msg += "→ Unter Windows: Einstellungen → Zeit & Sprache → Sprache → Stimmen hinzufügen („Deutsch“).\n";
+              msg += "→ Chrome braucht evtl. das Modul „Google Deutsch“ aus dem Web Store.";
+            } else if (matching.length === 0) {
+              msg += "Verfügbare Sprachen: " + [...new Set(voices.map(v => v.lang.split("-")[0]))].sort().join(", ") + "\n\n";
+              msg += "→ „" + langPrefix + "“ ist NICHT dabei. Bitte deutsche Sprachstimme im Betriebssystem installieren.";
+            } else {
+              msg += "Stimmen-Liste:\n" + matching.map(v => "  " + v.name + " (" + v.lang + ")").join("\n");
+            }
+            alert(msg);
+          }
           return false;
         }
         const p = chunks[idx];
