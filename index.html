@@ -362,7 +362,7 @@
 
   <script>
     (function () {
-      const VERSION = "5.9";
+      const VERSION = "6.0";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -556,12 +556,15 @@
           for (const b of data.books) {
             const item = document.createElement("div");
             item.className = "book-item";
+            const metaParts = [(b.lang || "").toUpperCase()];
+            if (b.scope) metaParts.push(b.scope);
+            metaParts.push(b.chunks + " Absätze");
             item.innerHTML =
               '<div class="cover">📖</div>' +
               '<div class="info">' +
               '<div class="t">' + b.title + '</div>' +
               '<div class="a">' + (b.author || "") + '</div>' +
-              '<div class="meta">' + (b.lang || "").toUpperCase() + ' · ' + b.chunks + ' Absätze</div>' +
+              '<div class="meta">' + metaParts.join(" · ") + '</div>' +
               '</div>';
             item.addEventListener("click", function () { openBook(b.id); });
             bookListEl.appendChild(item);

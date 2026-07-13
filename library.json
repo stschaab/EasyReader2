@@ -5,14 +5,16 @@
       "title": "Война и мир",
       "author": "Лев Толстой",
       "lang": "ru",
-      "chunks": 97
+      "chunks": 1371,
+      "scope": "Band 1 · Teil 1"
     },
     {
       "id": 2,
       "title": "Zalacaín el Aventurero",
       "author": "Pío Baroja",
       "lang": "es",
-      "chunks": 626
+      "chunks": 626,
+      "scope": "Vollständiger Roman"
     }
   ]
 }
