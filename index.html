@@ -244,6 +244,47 @@
       border-radius: 8px; cursor: pointer; font-family: inherit;
     }
     .review-card .close-review:hover { color: var(--text); border-color: var(--muted); }
+    /* Löschen-Button oben rechts auf einer Karte */
+    .review-card .card-delete-btn {
+      background: transparent; border: none; color: var(--muted-2); cursor: pointer;
+      font-size: 0.9rem; padding: 0.2rem 0.4rem; float: right; font-family: inherit;
+    }
+    .review-card .card-delete-btn:hover { color: var(--accent); }
+    /* Popup: Status + Entfernen */
+    .dict-popup .deck-status { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.7rem; }
+    .dict-popup .added-mark {
+      font-size: 0.78rem; font-weight: 600; color: var(--ok);
+      padding: 0.4rem 0.8rem; border-radius: 999px; background: rgba(46,204,113,0.12);
+    }
+    .dict-popup .remove-btn {
+      background: transparent; border: none; color: var(--muted); cursor: pointer;
+      font-size: 0.75rem; font-family: inherit; text-decoration: underline; padding: 0.2rem;
+    }
+    .dict-popup .remove-btn:hover { color: var(--accent); }
+    /* Deck-Liste in der Fertig-Ansicht */
+    .deck-list {
+      max-height: 50vh; overflow-y: auto; margin: 1rem 0;
+      border: 1px solid var(--border); border-radius: 10px; padding: 0.4rem;
+      text-align: left;
+    }
+    .deck-row {
+      display: flex; align-items: center; gap: 0.8rem;
+      padding: 0.5rem 0.4rem; border-bottom: 1px solid var(--border);
+    }
+    .deck-row:last-child { border-bottom: none; }
+    .deck-row-main { flex: 1; min-width: 0; }
+    .deck-row-lemma { font-weight: 600; color: var(--text); }
+    .deck-row-reps { color: var(--muted-2); font-size: 0.75rem; }
+    .deck-row-due { color: var(--accent); font-size: 0.72rem; font-weight: 600; }
+    .deck-row-future { color: var(--muted-2); font-size: 0.72rem; }
+    .deck-row-gloss { color: var(--muted); font-size: 0.78rem; margin-top: 2px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .deck-row-del {
+      background: transparent; border: none; color: var(--muted-2); cursor: pointer;
+      font-size: 0.95rem; padding: 0.3rem 0.5rem; border-radius: 6px; font-family: inherit;
+      flex-shrink: 0;
+    }
+    .deck-row-del:hover { color: var(--accent); background: var(--accent-soft); }
   </style>
 </head>
 <body>
@@ -309,7 +350,7 @@
 
   <script>
     (function () {
-      const VERSION = "5.6";
+      const VERSION = "5.7";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -410,6 +451,13 @@
         c.interval_hours = newIntervalHours;
         c.due = new Date(Date.now() + newIntervalHours * 3600 * 1000).toISOString();
         saveDeck(deck);
+      }
+      function removeCard(lemma) {
+        const deck = loadDeck();
+        if (!deck[lemma]) return false;
+        delete deck[lemma];
+        saveDeck(deck);
+        return true;
       }
       function intervalLabel(hours) {
         if (hours < 1) return Math.round(hours * 60) + " min";
@@ -605,18 +653,57 @@
         reviewOverlay.classList.add("hidden");
         reviewQueue = [];
       }
+      // „Fertig"-Ansicht: Erfolgsmeldung + komplette Deck-Liste mit Lösch-Buttons
+      function renderReviewDone() {
+        const deck = loadDeck();
+        const allCards = Object.values(deck).sort((a, b) => (a.added || "").localeCompare(b.added || ""));
+        const total = allCards.length;
+        let listHtml = "";
+        if (total === 0) {
+          listHtml = '<p class="counter">Dein Deck ist leer.</p>';
+        } else {
+          listHtml = '<p class="counter">Deck: ' + total + ' Karten — zum Entfernen 🗑 klicken</p>';
+          listHtml += '<div class="deck-list">';
+          for (const c of allCards) {
+            const due = new Date(c.due);
+            const now = new Date();
+            const isDue = due.getTime() <= now.getTime();
+            listHtml +=
+              '<div class="deck-row">' +
+                '<div class="deck-row-main">' +
+                  '<span class="deck-row-lemma">' + escapeHtml(c.lemma) + '</span>' +
+                  (c.reps > 0 ? ' <span class="deck-row-reps">×' + c.reps + '</span>' : '') +
+                  (isDue ? ' <span class="deck-row-due">fällig</span>' : ' <span class="deck-row-future">in ' + intervalLabel(Math.max(0.5, (due.getTime() - now.getTime()) / 3600000)) + '</span>') +
+                  (c.gloss ? '<div class="deck-row-gloss">' + escapeHtml(c.gloss.substring(0, 60)) + (c.gloss.length > 60 ? '…' : '') + '</div>' : '') +
+                '</div>' +
+                '<button class="deck-row-del" data-del-lemma="' + escapeHtml(c.lemma).replace(/"/g, '&quot;') + '">🗑</button>' +
+              '</div>';
+          }
+          listHtml += '</div>';
+        }
+        reviewCard.innerHTML =
+          '<h2>🎓 Üben</h2>' +
+          (total > 0 ? '<div class="done-msg">✓ Alle fälligen Karten geschafft.</div>' : '') +
+          listHtml +
+          '<button class="close-review" id="close-review-btn">Schließen</button>';
+        document.getElementById("close-review-btn").addEventListener("click", closeReview);
+        // Lösch-Buttons binden
+        const delBtns = reviewCard.querySelectorAll(".deck-row-del");
+        for (const b of delBtns) {
+          b.addEventListener("click", function () {
+            const lemma = b.getAttribute("data-del-lemma");
+            if (confirm("„" + lemma + "\" aus dem Deck löschen?")) {
+              removeCard(lemma);
+              renderReviewDone();  // Liste neu rendern
+            }
+          });
+        }
+        updateBadge();
+      }
       function renderReviewCard() {
         if (reviewPos >= reviewQueue.length) {
-          // alle geschafft
-          const deck = loadDeck();
-          const total = Object.keys(deck).length;
-          reviewCard.innerHTML =
-            '<h2>🎓 Üben</h2>' +
-            '<div class="done-msg">✓ Alle fälligen Karten geschafft.</div>' +
-            '<p class="counter">Deck: ' + total + ' Karten insgesamt</p>' +
-            '<button class="close-review" id="close-review-btn">Schließen</button>';
-          document.getElementById("close-review-btn").addEventListener("click", closeReview);
-          updateBadge();
+          // alle geschafft — zeige auch die Deck-Verwaltung
+          renderReviewDone();
           return;
         }
         const c = reviewQueue[reviewPos];
@@ -650,11 +737,19 @@
             (c.inflected ? '<div class="vocab-inflected">(Form im Text: „' + escapeHtml(c.inflected) + '")</div>' : '');
         }
         const cardHtml =
-          '<h2>🎓 Üben</h2>' +
+          '<h2>🎓 Üben <button class="card-delete-btn" id="card-delete-btn" title="Diese Karte löschen">🗑</button></h2>' +
           '<p class="counter">Karte ' + (reviewPos + 1) + ' / ' + total + '</p>' +
           frontHtml +
           '<div id="flip-area"></div>';
         reviewCard.innerHTML = cardHtml;
+        document.getElementById("card-delete-btn").addEventListener("click", function () {
+          if (confirm("„" + c.lemma + "\" aus dem Deck löschen?")) {
+            removeCard(c.lemma);
+            // Karte aus Queue entfernen und nächste zeigen
+            reviewQueue.splice(reviewPos, 1);
+            renderReviewCard();
+          }
+        });
         renderFlipArea(c);
       }
       function renderFlipArea(c) {
@@ -994,11 +1089,14 @@
           html += '</div>';
           if (entry.pos) html += '<div class="pos">' + entry.pos + '</div>';
           html += '<div class="gloss">' + entry.gloss + '</div>';
-          // Lernen-Button: nur im Happy-Path. Wenn schon im Deck → deaktiviert.
+          // Lernen-Button: nur im Happy-Path. Wenn schon im Deck → Status + Entfernen.
           const inDeck = loadDeck()[entry.lemma];
-          html += '<button class="learn-btn' + (inDeck ? ' added' : '') + '" data-lemma="' + entry.lemma.replace(/"/g, '&quot;') + '"' +
-                  (inDeck ? ' disabled' : '') + '>' +
-                  (inDeck ? '✓ Im Deck' : '+ Lernen') + '</button>';
+          if (inDeck) {
+            html += '<div class="deck-status"><span class="added-mark">✓ Im Deck</span>' +
+                    '<button class="remove-btn" data-remove-lemma="' + entry.lemma.replace(/"/g, '&quot;') + '">Entfernen</button></div>';
+          } else {
+            html += '<button class="learn-btn" data-lemma="' + entry.lemma.replace(/"/g, '&quot;') + '">+ Lernen</button>';
+          }
         }
         html += '<div class="close-hint">Tippe daneben zum Schließen</div>';
         showPopup(html, x, y);
@@ -1034,9 +1132,23 @@
         }
         const added = addCard(cardEntry, chunks[idx] ? chunks[idx].A1 : null);
         if (added) {
-          btn.textContent = "✓ Im Deck";
-          btn.classList.add("added");
-          btn.disabled = true;
+          // Popup neu rendern, damit der Entfernen-Button erscheint
+          renderDict(lemma, cardEntry, parseInt(dictPopup.style.left), parseInt(dictPopup.style.top));
+        }
+      });
+      // Entfernen-Button im Popup (für Wörter, die schon im Deck sind)
+      dictPopup.addEventListener("click", function (e) {
+        const btn = e.target.closest(".remove-btn");
+        if (!btn) return;
+        const lemma = btn.getAttribute("data-remove-lemma");
+        if (!lemma) return;
+        removeCard(lemma);
+        // Popup neu rendern: jetzt ist das Wort weg → zeigt wieder „+ Lernen"
+        const entry = dictCache[lemma] || Object.values(dictCache).find(en => en && en.lemma === lemma);
+        if (entry) {
+          renderDict(lemma, entry, parseInt(dictPopup.style.left), parseInt(dictPopup.style.top));
+        } else {
+          hidePopup();
         }
       });
 
