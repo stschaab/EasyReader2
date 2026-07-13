@@ -168,8 +168,8 @@
     .dict-popup {
       position: fixed; z-index: 100;
       background: var(--card-2); border: 1px solid var(--accent);
-      border-radius: 12px; padding: 0.9rem 1.1rem; max-width: 300px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); font-size: 0.95rem; display: none;
+      border-radius: 12px; padding: 1rem 1.2rem; max-width: 380px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); font-size: 1rem; display: none;
     }
     .dict-popup.visible { display: block; }
     .dict-popup .dw { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.3rem; }
@@ -202,8 +202,16 @@
     }
     /* Review-Overlay */
     .review-overlay { position: fixed; inset: 0; background: var(--bg); z-index: 150;
-      display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+      display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 1.5rem; }
     .review-overlay.hidden { display: none; }
+    .review-topbar { width: 100%; max-width: 460px; display: flex; justify-content: space-between;
+      margin-bottom: 1rem; }
+    .review-topbar-btn {
+      background: transparent; border: 1px solid var(--border); color: var(--muted);
+      border-radius: 8px; padding: 0.4rem 0.7rem; font-size: 1rem; cursor: pointer;
+      font-family: inherit; transition: all 0.12s;
+    }
+    .review-topbar-btn:hover { border-color: var(--accent); color: var(--accent); }
     .review-card { max-width: 460px; width: 100%; text-align: center; }
     .review-card h2 { margin: 0 0 0.5rem; font-size: 1.3rem; }
     .review-card .counter { color: var(--muted); font-size: 0.85rem; margin: 0 0 1.5rem; }
@@ -312,6 +320,10 @@
 
     <!-- Review-Overlay (Vokabeltrainer) -->
     <div class="review-overlay hidden" id="review-overlay">
+      <div class="review-topbar">
+        <button class="review-topbar-btn" id="review-lib-btn" title="Zur Bibliothek">📚</button>
+        <button class="review-topbar-btn" id="review-close-btn" title="Schließen">✕</button>
+      </div>
       <div class="review-card" id="review-card">
         <!-- wird per JS gefüllt -->
       </div>
@@ -350,7 +362,7 @@
 
   <script>
     (function () {
-      const VERSION = "5.7";
+      const VERSION = "5.8";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -483,6 +495,13 @@
       dueBadgeEl = document.getElementById("due-badge");
       const reviewOverlay = document.getElementById("review-overlay");
       const reviewCard = document.getElementById("review-card");
+      // Topbar-Buttons im Review-Overlay: 📚 zur Bibliothek, ✕ schließen
+      document.getElementById("review-close-btn").addEventListener("click", closeReview);
+      document.getElementById("review-lib-btn").addEventListener("click", function () {
+        closeReview();
+        overlay.classList.remove("hidden");
+        loadLibrary();
+      });
       updateBadge();  // initialen Badge-Stand setzen
       setInterval(updateBadge, 60000);  // alle 60s aktualisieren (fällige Karten)
       const levelsEl = document.getElementById("levels");
@@ -720,11 +739,13 @@
           const isSameForm = surfaceLc === lemmaLc;
           const re = new RegExp("\\b(" + escapeRegex(c.surfaceForm) + ")\\b", "i");
           const highlighted = escapeHtml(c.sentence).replace(re, function (m) {
-            // m ist das Original-Vorkommen (mit Originalgroßschreibung)
+            // m ist das Original-Vorkommen (mit Originalgroßschreibung).
+            // Hervorgehoben wird die Form, wie sie im Satz steht (Beugung);
+            // in Klammern die Grundform (das zu Lernende), falls abweichend.
             const inner = isSameForm
-              ? '<strong class="hl-lemma">' + escapeHtml(c.lemma) + '</strong>'
-              : '<strong class="hl-lemma">' + escapeHtml(c.lemma) + '</strong>' +
-                '<span class="hl-surface"> (' + escapeHtml(c.surfaceForm) + ')</span>';
+              ? '<strong class="hl-lemma">' + escapeHtml(c.surfaceForm) + '</strong>'
+              : '<strong class="hl-lemma">' + escapeHtml(c.surfaceForm) + '</strong>' +
+                '<span class="hl-surface"> (' + escapeHtml(c.lemma) + ')</span>';
             return inner;
           });
           frontHtml =
