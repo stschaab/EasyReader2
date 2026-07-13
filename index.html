@@ -179,6 +179,55 @@
     .dict-popup .gloss { color: var(--text); line-height: 1.45; }
     .dict-popup .loading, .dict-popup .err { color: var(--muted); }
     .dict-popup .close-hint { color: var(--muted-2); font-size: 0.7rem; margin-top: 0.5rem; }
+    /* Lernen-Button im Popup */
+    .dict-popup .learn-btn {
+      margin-top: 0.7rem; padding: 0.4rem 0.8rem; font-size: 0.78rem; font-weight: 600;
+      background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent);
+      border-radius: 999px; cursor: pointer; font-family: inherit; transition: all 0.12s;
+    }
+    .dict-popup .learn-btn:hover { background: var(--accent); color: var(--bg); }
+    .dict-popup .learn-btn.added { opacity: 0.6; cursor: default; }
+    /* Header: Review-Button + Badge */
+    .review-btn { position: relative; }
+    .due-badge {
+      position: absolute; top: -6px; right: -6px; background: var(--accent); color: var(--bg);
+      font-size: 0.65rem; font-weight: 700; min-width: 16px; height: 16px; padding: 0 4px;
+      border-radius: 999px; display: flex; align-items: center; justify-content: center;
+      line-height: 1;
+    }
+    /* Review-Overlay */
+    .review-overlay { position: fixed; inset: 0; background: var(--bg); z-index: 150;
+      display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
+    .review-overlay.hidden { display: none; }
+    .review-card { max-width: 460px; width: 100%; text-align: center; }
+    .review-card h2 { margin: 0 0 0.5rem; font-size: 1.3rem; }
+    .review-card .counter { color: var(--muted); font-size: 0.85rem; margin: 0 0 1.5rem; }
+    .review-card .vocab-lemma {
+      font-size: clamp(2rem, 8vw, 2.8rem); font-weight: 700; color: var(--accent);
+      margin: 1rem 0 0.4rem; word-break: break-word;
+    }
+    .review-card .vocab-pos { color: var(--muted-2); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .review-card .vocab-inflected { color: var(--muted); font-size: 0.85rem; margin-top: 0.3rem; }
+    .review-card .vocab-gloss {
+      font-size: 1.15rem; color: var(--text); line-height: 1.5; margin-top: 1.2rem;
+      padding: 1rem; background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    }
+    .review-card .grade-buttons { display: flex; gap: 0.6rem; justify-content: center; margin-top: 1.5rem; flex-wrap: wrap; }
+    .review-card .grade-btn {
+      padding: 0.6rem 1rem; font-size: 0.85rem; font-weight: 600;
+      background: var(--card); border: 1px solid var(--border); color: var(--text);
+      border-radius: 10px; cursor: pointer; font-family: inherit; transition: all 0.12s;
+      min-width: 90px;
+    }
+    .review-card .grade-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .review-card .grade-btn.primary { border-color: var(--accent); color: var(--accent); }
+    .review-card .done-msg { color: var(--ok); font-size: 1.1rem; margin: 2rem 0; }
+    .review-card .close-review {
+      margin-top: 1.5rem; padding: 0.5rem 1rem; font-size: 0.85rem;
+      background: transparent; border: 1px solid var(--border); color: var(--muted);
+      border-radius: 8px; cursor: pointer; font-family: inherit;
+    }
+    .review-card .close-review:hover { color: var(--text); border-color: var(--muted); }
   </style>
 </head>
 <body>
@@ -201,7 +250,15 @@
         <span class="author" id="book-author"></span>
       </div>
       <button class="library-btn" id="library-btn" aria-label="Bibliothek">📚</button>
+      <button class="library-btn review-btn" id="review-btn" aria-label="Vokabeln üben">🎓<span class="due-badge" id="due-badge"></span></button>
     </header>
+
+    <!-- Review-Overlay (Vokabeltrainer) -->
+    <div class="review-overlay hidden" id="review-overlay">
+      <div class="review-card" id="review-card">
+        <!-- wird per JS gefüllt -->
+      </div>
+    </div>
 
     <nav class="levels" id="levels" style="display:none"></nav>
 
@@ -236,7 +293,7 @@
 
   <script>
     (function () {
-      const VERSION = "5.2";
+      const VERSION = "5.3";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -249,12 +306,83 @@
         localStorage.setItem("easyreader2.userId", userId);
       }
 
+      // --- SRS / Vokabel-Deck (Interval-basiert, Feldnamen kompatibel mit user_words-Schema) ---
+      const DECK_KEY = "er2_deck";
+      function loadDeck() {
+        try { return JSON.parse(localStorage.getItem(DECK_KEY) || "{}"); }
+        catch (e) { return {}; }
+      }
+      function saveDeck(deck) {
+        localStorage.setItem(DECK_KEY, JSON.stringify(deck));
+        updateBadge();
+      }
+      function addCard(entry) {
+        // entry: { lemma, pos, gloss, inflected } aus renderDict
+        if (!entry || !entry.lemma) return false;
+        const deck = loadDeck();
+        if (deck[entry.lemma]) return false;  // schon im Deck
+        const now = new Date();
+        deck[entry.lemma] = {
+          lemma: entry.lemma,
+          gloss: entry.gloss || "",
+          pos: entry.pos || "",
+          inflected: entry.inflected || null,
+          lang: (book && book.wiktionary_lang) || "ru",
+          interval_hours: 0,                  // noch nie geübt → sofort fällig
+          due: now.toISOString(),             // ab sofort fällig
+          reps: 0,
+          added: now.toISOString(),
+        };
+        saveDeck(deck);
+        return true;
+      }
+      function getDueCards() {
+        const deck = loadDeck();
+        const now = Date.now();
+        return Object.values(deck)
+          .filter(c => new Date(c.due).getTime() <= now)
+          .sort((a, b) => new Date(a.due).getTime() - new Date(b.due).getTime());
+      }
+      function countDue() {
+        const deck = loadDeck();
+        const now = Date.now();
+        return Object.values(deck).filter(c => new Date(c.due).getTime() <= now).length;
+      }
+      function gradeCard(lemma, newIntervalHours) {
+        const deck = loadDeck();
+        const c = deck[lemma];
+        if (!c) return;
+        c.reps = (c.reps || 0) + 1;
+        c.interval_hours = newIntervalHours;
+        c.due = new Date(Date.now() + newIntervalHours * 3600 * 1000).toISOString();
+        saveDeck(deck);
+      }
+      function intervalLabel(hours) {
+        if (hours < 1) return Math.round(hours * 60) + " min";
+        if (hours < 24) return hours + " h";
+        const d = Math.round(hours / 24);
+        return d + " Tag" + (d === 1 ? "" : "e");
+      }
+      let reviewBtnEl = null, dueBadgeEl = null;
+      function updateBadge() {
+        if (!dueBadgeEl) return;
+        const n = countDue();
+        dueBadgeEl.textContent = n > 0 ? (n > 99 ? "99+" : n) : "";
+        dueBadgeEl.style.display = n > 0 ? "" : "none";
+      }
+
       const overlay = document.getElementById("book-select-overlay");
       const bookListEl = document.getElementById("book-list");
       const header = document.getElementById("main-header");
       const titleEl = document.getElementById("book-title");
       const authorEl = document.getElementById("book-author");
       const libraryBtn = document.getElementById("library-btn");
+      reviewBtnEl = document.getElementById("review-btn");
+      dueBadgeEl = document.getElementById("due-badge");
+      const reviewOverlay = document.getElementById("review-overlay");
+      const reviewCard = document.getElementById("review-card");
+      updateBadge();  // initialen Badge-Stand setzen
+      setInterval(updateBadge, 60000);  // alle 60s aktualisieren (fällige Karten)
       const levelsEl = document.getElementById("levels");
       const textEl = document.getElementById("chunk-text");
       const nrEl = document.getElementById("chunk-nr");
@@ -407,6 +535,85 @@
         overlay.classList.remove("hidden");
         loadLibrary();
       });
+
+      // --- Review-Modus (Vokabeltrainer) ---
+      let reviewQueue = [];
+      let reviewPos = 0;
+      let reviewFlipped = false;
+
+      function openReview() {
+        reviewQueue = getDueCards();
+        reviewPos = 0;
+        reviewOverlay.classList.remove("hidden");
+        renderReviewCard();
+      }
+      function closeReview() {
+        reviewOverlay.classList.add("hidden");
+        reviewQueue = [];
+      }
+      function renderReviewCard() {
+        if (reviewPos >= reviewQueue.length) {
+          // alle geschafft
+          const deck = loadDeck();
+          const total = Object.keys(deck).length;
+          reviewCard.innerHTML =
+            '<h2>🎓 Üben</h2>' +
+            '<div class="done-msg">✓ Alle fälligen Karten geschafft.</div>' +
+            '<p class="counter">Deck: ' + total + ' Karten insgesamt</p>' +
+            '<button class="close-review" id="close-review-btn">Schließen</button>';
+          document.getElementById("close-review-btn").addEventListener("click", closeReview);
+          updateBadge();
+          return;
+        }
+        const c = reviewQueue[reviewPos];
+        reviewFlipped = false;
+        const total = reviewQueue.length;
+        const cardHtml =
+          '<h2>🎓 Üben</h2>' +
+          '<p class="counter">Karte ' + (reviewPos + 1) + ' / ' + total + '</p>' +
+          '<div class="vocab-lemma">' + escapeHtml(c.lemma) + '</div>' +
+          (c.pos ? '<div class="vocab-pos">' + escapeHtml(c.pos) + '</div>' : '') +
+          (c.inflected ? '<div class="vocab-inflected">(Form im Text: „' + escapeHtml(c.inflected) + '")</div>' : '') +
+          '<div id="flip-area"></div>';
+        reviewCard.innerHTML = cardHtml;
+        renderFlipArea(c);
+      }
+      function renderFlipArea(c) {
+        const flipArea = document.getElementById("flip-area");
+        if (!reviewFlipped) {
+          // Vorderseite: nur Aufdecken-Button
+          flipArea.innerHTML = '<button class="grade-btn primary" id="flip-btn" style="margin-top:1.5rem">Aufdecken</button>';
+          document.getElementById("flip-btn").addEventListener("click", function () {
+            reviewFlipped = true;
+            renderFlipArea(c);
+          });
+        } else {
+          // Rückseite: Gloss + 3 Interval-Buttons
+          const currentInterval = c.interval_hours || 0;
+          const newDouble = Math.max(currentInterval * 2, 24);  // mind. 1 Tag
+          flipArea.innerHTML =
+            '<div class="vocab-gloss">' + escapeHtml(c.gloss || '(keine Definition)') + '</div>' +
+            '<div class="grade-buttons">' +
+              '<button class="grade-btn" data-interval="0.5">🔄 ½ h</button>' +
+              '<button class="grade-btn" data-interval="24">1 Tag</button>' +
+              '<button class="grade-btn primary" data-interval="' + newDouble + '">2× (' + intervalLabel(newDouble) + ')</button>' +
+            '</div>';
+          const btns = flipArea.querySelectorAll(".grade-btn[data-interval]");
+          for (const b of btns) {
+            b.addEventListener("click", function () {
+              const newI = parseFloat(b.getAttribute("data-interval"));
+              gradeCard(c.lemma, newI);
+              reviewPos++;
+              renderReviewCard();
+            });
+          }
+        }
+      }
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+      }
+
+      reviewBtnEl.addEventListener("click", openReview);
 
       function setLevel(lvl) {
         level = lvl;
@@ -649,6 +856,11 @@
           html += '</div>';
           if (entry.pos) html += '<div class="pos">' + entry.pos + '</div>';
           html += '<div class="gloss">' + entry.gloss + '</div>';
+          // Lernen-Button: nur im Happy-Path. Wenn schon im Deck → deaktiviert.
+          const inDeck = loadDeck()[entry.lemma];
+          html += '<button class="learn-btn' + (inDeck ? ' added' : '') + '" data-lemma="' + entry.lemma.replace(/"/g, '&quot;') + '"' +
+                  (inDeck ? ' disabled' : '') + '>' +
+                  (inDeck ? '✓ Im Deck' : '+ Lernen') + '</button>';
         }
         html += '<div class="close-hint">Tippe daneben zum Schließen</div>';
         showPopup(html, x, y);
@@ -661,6 +873,33 @@
       });
       document.addEventListener("click", function (e) {
         if (!dictPopup.contains(e.target) && !e.target.closest(".word")) hidePopup();
+      });
+      // Lernen-Button im Popup (delegated, da Popup-HTML bei jedem lookUp neu gebaut wird)
+      dictPopup.addEventListener("click", function (e) {
+        const btn = e.target.closest(".learn-btn");
+        if (!btn || btn.disabled) return;
+        const lemma = btn.getAttribute("data-lemma");
+        const deck = loadDeck();
+        const entry = dictCache[lemma] || Object.values(dictCache).find(en => en && en.lemma === lemma);
+        // Fallback: falls nicht im Cache (sollte nicht passieren), aus Popup-DOM rekonstruieren
+        let cardEntry = entry;
+        if (!cardEntry) {
+          const glossEl = dictPopup.querySelector(".gloss");
+          const posEl = dictPopup.querySelector(".pos");
+          const inflEl = dictPopup.querySelector(".inflected");
+          cardEntry = {
+            lemma: lemma,
+            gloss: glossEl ? glossEl.textContent : "",
+            pos: posEl ? posEl.textContent : "",
+            inflected: inflEl ? inflEl.textContent.replace(/^\(von „|“\)$/g, "").trim() : null,
+          };
+        }
+        const added = addCard(cardEntry);
+        if (added) {
+          btn.textContent = "✓ Im Deck";
+          btn.classList.add("added");
+          btn.disabled = true;
+        }
       });
 
       // TTS
