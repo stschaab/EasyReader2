@@ -304,7 +304,7 @@
 
   <script>
     (function () {
-      const VERSION = "5.4";
+      const VERSION = "5.5";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -895,17 +895,41 @@
         word = word.trim().replace(keepCharRegex(), "");
         if (!word || word.length < 2) return;
         showPopup('<div class="loading">Suche „' + word + '"…</div>', x, y);
+        // Cache: sowohl Originalform als auch lowercase-Variante prüfen.
+        // (Wörter am Satzanfang sind großgeschrieben, Wiktionary hat Lemmata aber klein.)
         if (dictCache[word]) { renderDict(word, dictCache[word], x, y); return; }
+        const wordLc = word.toLowerCase();
+        if (word !== wordLc && dictCache[wordLc]) {
+          dictCache[word] = dictCache[wordLc];
+          renderDict(word, dictCache[word], x, y);
+          return;
+        }
+        // Versuch 1: Wort wie angeklickt (für Eigennamen, die im Wiktionary groß stehen).
+        let entry = await lookUpOne(word, lang);
+        // Versuch 2 (falls Versuch 1 erfolglos und Wort war groß): lowercase-Variante.
+        // Betrifft Wörter am Satzanfang, die als Lemma klein im Wiktionary stehen.
+        if (!entry && word !== wordLc) {
+          entry = await lookUpOne(wordLc, lang);
+        }
+        if (!entry) entry = { notFound: true };
+        dictCache[word] = entry;
+        if (entry.foundLemma) dictCache[entry.foundLemma.toLowerCase()] = entry;  // lowercase-Variante auch cachen
+        renderDict(word, entry, x, y);
+      }
+
+      // lookUpOne: ein einzelnes Wort gegen Wiktionary abfragen.
+      // Liefert einen Entry {lemma, pos, gloss, inflected, foundLemma} oder null bei nicht gefunden.
+      async function lookUpOne(word, lang) {
         try {
           const res = await fetch("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(word));
-          if (res.status === 404) { dictCache[word] = { notFound: true }; renderDict(word, dictCache[word], x, y); return; }
+          if (res.status === 404) return null;
           if (!res.ok) throw new Error("HTTP " + res.status);
           const json = await res.json();
-          if (!json[lang] || !json[lang].length) { dictCache[word] = { notFound: true }; renderDict(word, dictCache[word], x, y); return; }
+          if (!json[lang] || !json[lang].length) return null;
           const section = json[lang][0], def0 = section.definitions[0], defText = stripTags(def0.definition);
           const lemma = extractLemma(defText, lang);
           let gloss = defText, displayLemma = word;
-          if (lemma && lemma !== word) {
+          if (lemma && lemma.toLowerCase() !== word.toLowerCase()) {
             displayLemma = lemma;
             const lemmaClean = stripAccents(lemma);
             try {
@@ -916,9 +940,16 @@
               }
             } catch (e) {}
           }
-          dictCache[word] = { lemma: displayLemma, pos: section.partOfSpeech, gloss, inflected: lemma && lemma !== word ? word : null };
-          renderDict(word, dictCache[word], x, y);
-        } catch (e) { dictCache[word] = { error: true }; renderDict(word, dictCache[word], x, y); }
+          return {
+            lemma: displayLemma,
+            pos: section.partOfSpeech,
+            gloss,
+            inflected: (lemma && lemma.toLowerCase() !== word.toLowerCase()) ? word : null,
+            foundLemma: displayLemma,
+          };
+        } catch (e) {
+          return { error: true };
+        }
       }
       function renderDict(word, entry, x, y) {
         let html;
