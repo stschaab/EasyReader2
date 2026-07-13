@@ -206,6 +206,17 @@
       font-size: clamp(2rem, 8vw, 2.8rem); font-weight: 700; color: var(--accent);
       margin: 1rem 0 0.4rem; word-break: break-word;
     }
+    .review-card .vocab-sentence {
+      font-size: clamp(1.3rem, 5vw, 1.6rem); line-height: 1.5; color: var(--text);
+      margin: 1rem 0 0.4rem; word-break: break-word;
+    }
+    .review-card .vocab-sentence .hl-lemma {
+      color: var(--accent); font-weight: 700;
+      border-bottom: 2px dotted var(--accent); padding-bottom: 1px;
+    }
+    .review-card .vocab-sentence .hl-surface {
+      color: var(--muted); font-size: 0.75em; font-weight: 400;
+    }
     .review-card .vocab-pos { color: var(--muted-2); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
     .review-card .vocab-inflected { color: var(--muted); font-size: 0.85rem; margin-top: 0.3rem; }
     .review-card .vocab-gloss {
@@ -293,7 +304,7 @@
 
   <script>
     (function () {
-      const VERSION = "5.3";
+      const VERSION = "5.4";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -316,12 +327,47 @@
         localStorage.setItem(DECK_KEY, JSON.stringify(deck));
         updateBadge();
       }
-      function addCard(entry) {
+      // Mini-Satz-Extraktion: gibt den Satz aus dem A1-Text zurück, der eine Form
+      // des Lemmas enthält. Liefert { sentence, surfaceForm } oder null.
+      // Matching-Strategie: Wortgrenzen-treues Lowercase-Matching auf den Lemma-Stamm.
+      // Für sehr kurze Lemmata (≤ 3 Buchstaben) exaktes Matching, sonst Stamm-Matching.
+      function findMiniSentence(lemma, a1Text) {
+        if (!lemma || !a1Text) return null;
+        const lemmaLc = lemma.toLowerCase();
+        // Sätze am Satzende splitten (wie im Chunker)
+        const sentences = a1Text.split(/([.!?]+)/).reduce((acc, part, i, arr) => {
+          if (i % 2 === 0 && part.trim()) acc.push((part + (arr[i + 1] || "")).trim());
+          return acc;
+        }, []);
+        // Stamm: erste 4+ Zeichen des Lemmas, mind. 4, für Stamm-Matching
+        const stem = lemmaLc.length >= 5 ? lemmaLc.slice(0, Math.max(4, lemmaLc.length - 2)) : lemmaLc;
+        const isShort = lemmaLc.length <= 3;
+        for (const s of sentences) {
+          // Wortgrenzen-Regex: Suche nach Wörtern, die mit dem Stamm beginnen
+          // (erlaubt Beugung: muralla, murallas, murallas; aber nicht mur en muralla)
+          const wordRe = new RegExp(
+            "\\b(" + escapeRegex(isShort ? lemmaLc : stem) + "[a-záéíóúñü]*)\\b",
+            "i"
+          );
+          const m = s.match(wordRe);
+          if (m) {
+            return { sentence: s, surfaceForm: m[1] };
+          }
+        }
+        return null;
+      }
+      function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+
+      function addCard(entry, a1Text) {
         // entry: { lemma, pos, gloss, inflected } aus renderDict
+        // a1Text: optional, der A1-Text des aktuellen Chunks für die Satz-Extraktion
         if (!entry || !entry.lemma) return false;
         const deck = loadDeck();
         if (deck[entry.lemma]) return false;  // schon im Deck
         const now = new Date();
+        // Mini-Satz extrahieren (falls A1-Text verfügbar)
+        let mini = null;
+        if (a1Text) mini = findMiniSentence(entry.lemma, a1Text);
         deck[entry.lemma] = {
           lemma: entry.lemma,
           gloss: entry.gloss || "",
@@ -332,6 +378,9 @@
           due: now.toISOString(),             // ab sofort fällig
           reps: 0,
           added: now.toISOString(),
+          // Kontext-Mini-Satz (neu):
+          sentence: mini ? mini.sentence : null,
+          surfaceForm: mini ? mini.surfaceForm : null,
         };
         saveDeck(deck);
         return true;
@@ -568,12 +617,37 @@
         const c = reviewQueue[reviewPos];
         reviewFlipped = false;
         const total = reviewQueue.length;
+        // Vorderseite: Mini-Satz (falls vorhanden) mit Grundform hervorgehoben,
+        // sonst isoliertes Lemma (Fallback).
+        let frontHtml;
+        if (c.sentence && c.surfaceForm) {
+          // Ersetze das erste Vorkommen der Surface-Form im Satz durch Highlight.
+          // Grundform hervorheben; falls Surface-Form abweicht, in Klammern dazu.
+          const surfaceLc = c.surfaceForm.toLowerCase();
+          const lemmaLc = c.lemma.toLowerCase();
+          const isSameForm = surfaceLc === lemmaLc;
+          const re = new RegExp("\\b(" + escapeRegex(c.surfaceForm) + ")\\b", "i");
+          const highlighted = escapeHtml(c.sentence).replace(re, function (m) {
+            // m ist das Original-Vorkommen (mit Originalgroßschreibung)
+            const inner = isSameForm
+              ? '<strong class="hl-lemma">' + escapeHtml(c.lemma) + '</strong>'
+              : '<strong class="hl-lemma">' + escapeHtml(c.lemma) + '</strong>' +
+                '<span class="hl-surface"> (' + escapeHtml(c.surfaceForm) + ')</span>';
+            return inner;
+          });
+          frontHtml =
+            '<div class="vocab-sentence">' + highlighted + '</div>' +
+            (c.pos ? '<div class="vocab-pos" style="margin-top:0.6rem">' + escapeHtml(c.pos) + '</div>' : '');
+        } else {
+          frontHtml =
+            '<div class="vocab-lemma">' + escapeHtml(c.lemma) + '</div>' +
+            (c.pos ? '<div class="vocab-pos">' + escapeHtml(c.pos) + '</div>' : '') +
+            (c.inflected ? '<div class="vocab-inflected">(Form im Text: „' + escapeHtml(c.inflected) + '")</div>' : '');
+        }
         const cardHtml =
           '<h2>🎓 Üben</h2>' +
           '<p class="counter">Karte ' + (reviewPos + 1) + ' / ' + total + '</p>' +
-          '<div class="vocab-lemma">' + escapeHtml(c.lemma) + '</div>' +
-          (c.pos ? '<div class="vocab-pos">' + escapeHtml(c.pos) + '</div>' : '') +
-          (c.inflected ? '<div class="vocab-inflected">(Form im Text: „' + escapeHtml(c.inflected) + '")</div>' : '') +
+          frontHtml +
           '<div id="flip-area"></div>';
         reviewCard.innerHTML = cardHtml;
         renderFlipArea(c);
@@ -894,7 +968,7 @@
             inflected: inflEl ? inflEl.textContent.replace(/^\(von „|“\)$/g, "").trim() : null,
           };
         }
-        const added = addCard(cardEntry);
+        const added = addCard(cardEntry, chunks[idx] ? chunks[idx].A1 : null);
         if (added) {
           btn.textContent = "✓ Im Deck";
           btn.classList.add("added");
