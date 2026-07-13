@@ -212,6 +212,19 @@
       font-family: inherit; transition: all 0.12s;
     }
     .review-topbar-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .review-autoplay-label {
+      display: flex; align-items: center; gap: 0.4rem;
+      color: var(--muted); font-size: 0.85rem; cursor: pointer; user-select: none;
+    }
+    .review-autoplay-label input { cursor: pointer; accent-color: var(--accent); }
+    .card-front-row { display: flex; align-items: flex-start; gap: 0.8rem; }
+    .card-front-row > div:first-child { flex: 1; min-width: 0; }
+    .card-tts-btn {
+      background: var(--accent-soft); border: 1px solid var(--accent); color: var(--accent);
+      border-radius: 999px; padding: 0.4rem 0.7rem; font-size: 1rem; cursor: pointer;
+      font-family: inherit; flex-shrink: 0; transition: all 0.12s;
+    }
+    .card-tts-btn:hover { background: var(--accent); color: var(--bg); }
     .review-card { max-width: 460px; width: 100%; text-align: center; }
     .review-card h2 { margin: 0 0 0.5rem; font-size: 1.3rem; }
     .review-card .counter { color: var(--muted); font-size: 0.85rem; margin: 0 0 1.5rem; }
@@ -322,6 +335,9 @@
     <div class="review-overlay hidden" id="review-overlay">
       <div class="review-topbar">
         <button class="review-topbar-btn" id="review-lib-btn" title="Zur Bibliothek">📚</button>
+        <label class="review-autoplay-label" title="Satz automatisch vorlesen beim Kartenwechsel">
+          <input type="checkbox" id="review-autoplay-cb"> Autoplay
+        </label>
         <button class="review-topbar-btn" id="review-close-btn" title="Schließen">✕</button>
       </div>
       <div class="review-card" id="review-card">
@@ -362,7 +378,7 @@
 
   <script>
     (function () {
-      const VERSION = "6.3";
+      const VERSION = "6.4";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -497,6 +513,10 @@
       const reviewCard = document.getElementById("review-card");
       // Topbar-Buttons im Review-Overlay: 📚 zur Bibliothek, ✕ schließen
       document.getElementById("review-close-btn").addEventListener("click", closeReview);
+      document.getElementById("review-autoplay-cb").addEventListener("change", function (e) {
+        reviewAutoplay = e.target.checked;
+        if (!reviewAutoplay && reviewTTSspeaking && window.speechSynthesis) window.speechSynthesis.cancel();
+      });
       document.getElementById("review-lib-btn").addEventListener("click", function () {
         closeReview();
         overlay.classList.remove("hidden");
@@ -664,6 +684,48 @@
       let reviewQueue = [];
       let reviewPos = 0;
       let reviewFlipped = false;
+      let reviewAutoplay = false;
+      let reviewTTSspeaking = false;
+
+      // TTS für den Review-Modus: wählt Stimme nach lang-Code der Karte (z.B. "es").
+      // Cacht gefundene Stimmen pro Sprache.
+      const reviewVoiceCache = {};
+      function getReviewVoice(lang) {
+        if (!lang) return null;
+        if (reviewVoiceCache[lang]) return reviewVoiceCache[lang];
+        const voices = window.speechSynthesis.getVoices();
+        const v = voices.find(v => v.lang === lang) ||
+                 voices.find(v => v.lang && v.lang.startsWith(lang + "-")) ||
+                 voices.find(v => v.lang && v.lang.startsWith(lang));
+        reviewVoiceCache[lang] = v || false;  // false = gesucht und nicht gefunden
+        return v || null;
+      }
+      function playCardText(text, lang) {
+        if (!window.speechSynthesis) return false;
+        if (reviewTTSspeaking) { window.speechSynthesis.cancel(); }
+        const voice = getReviewVoice(lang);
+        if (!voice) {
+          // Diagnose-Alert (analog v6.3 Lesemodus)
+          const voices = window.speechSynthesis.getVoices();
+          const matching = voices.filter(v => v.lang && v.lang.startsWith(lang));
+          let msg = "Keine „" + lang + "\" Stimme gefunden.\n\n";
+          msg += "Gefundene Stimmen gesamt: " + voices.length + "\n";
+          msg += "Davon „" + lang + "\": " + matching.length + "\n";
+          if (voices.length === 0) msg += "→ Chrome-Bug: Seite neu laden (Strg+F5).";
+          else if (matching.length === 0) msg += "→ Sprachstimme im Betriebssystem installieren.";
+          alert(msg);
+          return false;
+        }
+        const utter = new SpeechSynthesisUtterance(text);
+        utter.voice = voice;
+        utter.lang = voice.lang;
+        utter.rate = parseFloat(ttsRate.value);
+        utter.onend = function () { reviewTTSspeaking = false; };
+        utter.onerror = function () { reviewTTSspeaking = false; };
+        reviewTTSspeaking = true;
+        window.speechSynthesis.speak(utter);
+        return true;
+      }
 
       function openReview() {
         reviewQueue = getDueCards();
@@ -763,7 +825,10 @@
         const cardHtml =
           '<h2>🎓 Üben <button class="card-delete-btn" id="card-delete-btn" title="Diese Karte löschen">🗑</button></h2>' +
           '<p class="counter">Karte ' + (reviewPos + 1) + ' / ' + total + '</p>' +
-          frontHtml +
+          '<div class="card-front-row">' +
+            frontHtml +
+            '<button class="card-tts-btn" id="card-tts-btn" title="Satz vorlesen">🔊</button>' +
+          '</div>' +
           '<div id="flip-area"></div>';
         reviewCard.innerHTML = cardHtml;
         document.getElementById("card-delete-btn").addEventListener("click", function () {
@@ -774,7 +839,19 @@
             renderReviewCard();
           }
         });
+        // 🔊-Button: spielt den Lernsatz (oder Lemma als Fallback) in der Karten-Sprache
+        document.getElementById("card-tts-btn").addEventListener("click", function () {
+          const text = (c.sentence && c.surfaceForm) ? c.sentence : c.lemma;
+          playCardText(text, c.lang || "es");
+        });
         renderFlipArea(c);
+        // Autoplay: wenn aktiviert, Satz automatisch beim Kartenwechsel vorlesen
+        if (reviewAutoplay) {
+          setTimeout(function () {
+            const text = (c.sentence && c.surfaceForm) ? c.sentence : c.lemma;
+            playCardText(text, c.lang || "es");
+          }, 300);
+        }
       }
       function renderFlipArea(c) {
         const flipArea = document.getElementById("flip-area");
