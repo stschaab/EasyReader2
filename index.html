@@ -362,7 +362,7 @@
 
   <script>
     (function () {
-      const VERSION = "6.1";
+      const VERSION = "6.2";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1016,11 +1016,16 @@
       function keepCharRegex() {
         // Statisch pro Sprache (schnell genug): wir übersetzen die wenigen bekannten Regexes.
         const wr = (book && book.word_regex) || "";
+        if (/ÄÖÜäöüß/.test(wr)) return /[^A-Za-zÄÖÜäöüß]/g;             // Deutsch
         if (/ÁÉÍÓÚÜáéíóúüÑñ/.test(wr)) return /[^A-Za-zÁÉÍÓÚÜáéíóúüÑñ]/g;  // Spanisch
         return /[^А-Яа-яЁё]/g;  // Russisch (Default)
       }
       function extractLemma(html, lang) {
         // „of <Wort>"-Pattern. Wort-Zeichenklasse hängt von der Sprache ab.
+        if (lang === "de") {
+          const m = html.match(/of\s+([A-Za-zÄÖÜäöüß]+)/);
+          return m ? m[1] : null;
+        }
         if (lang === "es") {
           const m = html.match(/of\s+([A-Za-zÁÉÍÓÚÜáéíóúüÑñ]+)/);
           return m ? m[1] : null;
