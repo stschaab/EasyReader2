@@ -175,6 +175,11 @@
     .dict-popup .dw { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.3rem; }
     .dict-popup .lemma { font-size: 1.15rem; font-weight: 700; color: var(--accent); }
     .dict-popup .inflected { color: var(--muted); font-size: 0.8rem; }
+    .dict-popup .rank-badge {
+      color: var(--muted-2); font-size: 0.7rem; font-weight: 600;
+      background: var(--card); border: 1px solid var(--border);
+      padding: 0.1rem 0.4rem; border-radius: 6px; white-space: nowrap;
+    }
     .dict-popup .pos { color: var(--muted-2); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; }
     .dict-popup .gloss { color: var(--text); line-height: 1.45; }
     .dict-popup .loading, .dict-popup .err { color: var(--muted); }
@@ -304,7 +309,7 @@
 
   <script>
     (function () {
-      const VERSION = "5.5";
+      const VERSION = "5.6";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -859,6 +864,22 @@
 
       // Wort-Übersetzung (gleiche Logik wie SimpleReader)
       const dictCache = {};
+      // Frequenzränge (lazy geladen, nur Lemma→rank Map, spanisch)
+      let rankMap = null;
+      let rankMapLoading = null;
+      async function ensureRankMap() {
+        if (rankMap) return rankMap;
+        if (rankMapLoading) return rankMapLoading;
+        rankMapLoading = fetch("es_ranks.json?v=" + VERSION)
+          .then(r => r.ok ? r.json() : {})
+          .then(j => { rankMap = j; return j; })
+          .catch(() => { rankMap = {}; return {}; });
+        return rankMapLoading;
+      }
+      function rankForLemma(lemma) {
+        if (!rankMap || !lemma) return null;
+        return rankMap[lemma.toLowerCase()] || null;
+      }
       function showPopup(html, x, y) {
         dictPopup.innerHTML = html;
         dictPopup.classList.add("visible");
@@ -895,6 +916,9 @@
         word = word.trim().replace(keepCharRegex(), "");
         if (!word || word.length < 2) return;
         showPopup('<div class="loading">Suche „' + word + '"…</div>', x, y);
+        // Frequenzränge lazy laden (parallel, blockiert den LookUp nicht).
+        // Nur relevant für spanische Bücher — andere Sprachen haben wir nicht.
+        if (lang === "es") ensureRankMap();
         // Cache: sowohl Originalform als auch lowercase-Variante prüfen.
         // (Wörter am Satzanfang sind großgeschrieben, Wiktionary hat Lemmata aber klein.)
         if (dictCache[word]) { renderDict(word, dictCache[word], x, y); return; }
@@ -912,6 +936,11 @@
           entry = await lookUpOne(wordLc, lang);
         }
         if (!entry) entry = { notFound: true };
+        // Rang aus der Frequenzliste dazuschreiben (falls geladen und Lemma bekannt).
+        if (entry.lemma && rankMap) {
+          const r = rankForLemma(entry.lemma);
+          if (r != null) entry.rank = r;
+        }
         dictCache[word] = entry;
         if (entry.foundLemma) dictCache[entry.foundLemma.toLowerCase()] = entry;  // lowercase-Variante auch cachen
         renderDict(word, entry, x, y);
@@ -958,6 +987,10 @@
         else {
           html = '<div class="dw"><span class="lemma">' + entry.lemma + '</span>';
           if (entry.inflected) html += '<span class="inflected">(von „' + entry.inflected + '")</span>';
+          // Rang-Badge, falls vorhanden (nur spanische Bücher haben eine Frequenzliste)
+          if (entry.rank != null) {
+            html += '<span class="rank-badge">Rang ' + entry.rank + '</span>';
+          }
           html += '</div>';
           if (entry.pos) html += '<div class="pos">' + entry.pos + '</div>';
           html += '<div class="gloss">' + entry.gloss + '</div>';
