@@ -249,6 +249,35 @@
       font-size: 1.15rem; color: var(--text); line-height: 1.5; margin-top: 1.2rem;
       padding: 1rem; background: var(--card); border: 1px solid var(--border); border-radius: 10px;
     }
+    .review-card .vocab-en-sentence {
+      font-size: 1rem; color: var(--muted); line-height: 1.45; margin-top: 0.6rem;
+      padding: 0.8rem 1rem; background: var(--card-2); border-left: 3px solid var(--accent);
+      border-radius: 6px; font-style: italic;
+    }
+    /* Update-Banner (neue Version verfügbar) */
+    #update-banner {
+      position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+      z-index: 200; background: var(--accent); color: var(--bg);
+      padding: 0.6rem 0.9rem; border-radius: 999px;
+      box-shadow: 0 6px 24px rgba(79,140,255,0.4);
+      display: flex; align-items: center; gap: 0.7rem;
+      font-size: 0.85rem; font-weight: 600;
+      animation: slideDown 0.3s ease-out;
+    }
+    #update-banner button {
+      background: var(--bg); color: var(--accent); border: none;
+      padding: 0.3rem 0.8rem; border-radius: 999px; font-weight: 700;
+      cursor: pointer; font-family: inherit; font-size: 0.82rem;
+    }
+    #update-banner #update-dismiss-btn {
+      background: transparent; color: var(--bg); opacity: 0.7;
+      padding: 0.2rem 0.4rem; font-size: 0.9rem;
+    }
+    #update-banner #update-dismiss-btn:hover { opacity: 1; }
+    @keyframes slideDown {
+      from { transform: translateX(-50%) translateY(-100%); opacity: 0; }
+      to { transform: translateX(-50%) translateY(0); opacity: 1; }
+    }
     .review-card .grade-buttons { display: flex; gap: 0.6rem; justify-content: center; margin-top: 1.5rem; flex-wrap: wrap; }
     .review-card .grade-btn {
       padding: 0.6rem 1rem; font-size: 0.85rem; font-weight: 600;
@@ -378,7 +407,7 @@
 
   <script>
     (function () {
-      const VERSION = "6.5";
+      const VERSION = "6.6";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -432,9 +461,10 @@
       }
       function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 
-      function addCard(entry, a1Text) {
+      function addCard(entry, a1Text, chunkId) {
         // entry: { lemma, pos, gloss, inflected } aus renderDict
         // a1Text: optional, der A1-Text des aktuellen Chunks für die Satz-Extraktion
+        // chunkId: optional, für die Satz-Map-Übersetzung (spanisch)
         if (!entry || !entry.lemma) return false;
         const deck = loadDeck();
         if (deck[entry.lemma]) return false;  // schon im Deck
@@ -442,19 +472,26 @@
         // Mini-Satz extrahieren (falls A1-Text verfügbar)
         let mini = null;
         if (a1Text) mini = findMiniSentence(entry.lemma, a1Text);
+        // Satz-Übersetzung aus der sentenceMap (falls geladen)
+        let sentence_en = null;
+        if (chunkId && sentenceMap) {
+          const pair = findSentenceWithTranslation(entry.lemma, chunkId);
+          if (pair) sentence_en = pair.en;
+        }
         deck[entry.lemma] = {
           lemma: entry.lemma,
           gloss: entry.gloss || "",
           pos: entry.pos || "",
           inflected: entry.inflected || null,
           lang: (book && book.wiktionary_lang) || "ru",
-          interval_hours: 0,                  // noch nie geübt → sofort fällig
-          due: now.toISOString(),             // ab sofort fällig
+          interval_hours: 0,
+          due: now.toISOString(),
           reps: 0,
           added: now.toISOString(),
-          // Kontext-Mini-Satz (neu):
           sentence: mini ? mini.sentence : null,
           surfaceForm: mini ? mini.surfaceForm : null,
+          sentence_en: sentence_en,
+          chunk_id: chunkId || null,
         };
         saveDeck(deck);
         return true;
@@ -863,16 +900,22 @@
             renderFlipArea(c);
           });
         } else {
-          // Rückseite: Gloss + 3 Interval-Buttons
+          // Rückseite: Gloss + englischer Lernsatz (falls vorhanden) + 3 Interval-Buttons
           const currentInterval = c.interval_hours || 0;
           const newDouble = Math.max(currentInterval * 2, 24);  // mind. 1 Tag
-          flipArea.innerHTML =
-            '<div class="vocab-gloss">' + escapeHtml(c.gloss || '(keine Definition)') + '</div>' +
+          let backHtml =
+            '<div class="vocab-gloss">' + escapeHtml(c.gloss || '(keine Definition)') + '</div>';
+          // Englischer Lernsatz (nur spanisch, falls beim Sammeln gespeichert)
+          if (c.sentence_en) {
+            backHtml += '<div class="vocab-en-sentence">' + escapeHtml(c.sentence_en) + '</div>';
+          }
+          backHtml +=
             '<div class="grade-buttons">' +
               '<button class="grade-btn" data-interval="0.5">🔄 ½ h</button>' +
               '<button class="grade-btn" data-interval="24">1 Tag</button>' +
               '<button class="grade-btn primary" data-interval="' + newDouble + '">2× (' + intervalLabel(newDouble) + ')</button>' +
             '</div>';
+          flipArea.innerHTML = backHtml;
           const btns = flipArea.querySelectorAll(".grade-btn[data-interval]");
           for (const b of btns) {
             b.addEventListener("click", function () {
@@ -898,6 +941,7 @@
         stopTTS();
         render();
         saveProgress();
+        checkForUpdate();
       }
 
       function go(delta) {
@@ -906,7 +950,47 @@
         idx = next;
         render();
         saveProgress();
+        checkForUpdate();  // beim Seitenwechsel nach neuer Version schauen
       }
+
+      // ─── Update-Check: vergleicht lokale VERSION mit library.json.version ───
+      // Triggert bei: Seitenwechsel, Level-Wechsel, und alle 5 Min.
+      let lastUpdateCheck = 0;
+      let updateBannerShown = false;
+      function checkForUpdate(force) {
+        // Throttle: höchstens alle 60s prüfen (außer force)
+        const now = Date.now();
+        if (!force && now - lastUpdateCheck < 60000) return;
+        if (updateBannerShown) return;  // Banner schon da → nicht nochmal prüfen
+        lastUpdateCheck = now;
+        fetch("library.json?v=" + now)
+          .then(r => r.ok ? r.json() : null)
+          .then(j => {
+            if (!j || !j.version) return;
+            if (j.version !== VERSION) showUpdateBanner(j.version);
+          })
+          .catch(() => {});  // stiller Fehlschlag (Offline, Netz)
+      }
+      function showUpdateBanner(newVersion) {
+        if (updateBannerShown) return;
+        updateBannerShown = true;
+        const banner = document.createElement("div");
+        banner.id = "update-banner";
+        banner.innerHTML =
+          '<span>📦 Neue Version ' + escapeHtml(newVersion) + '</span>' +
+          '<button id="update-refresh-btn">Aktualisieren</button>' +
+          '<button id="update-dismiss-btn" title="Später">✕</button>';
+        document.body.appendChild(banner);
+        document.getElementById("update-refresh-btn").addEventListener("click", function () {
+          location.reload();  // hard reload, holt die neue index.html
+        });
+        document.getElementById("update-dismiss-btn").addEventListener("click", function () {
+          banner.remove();
+          // Banner bleibt weg für diese Session (updateBannerShown bleibt true)
+        });
+      }
+      // Update-Check auch periodisch (alle 5 Min) und beim Levelwechsel
+      setInterval(function () { checkForUpdate(true); }, 5 * 60 * 1000);
 
       // Progress speichern, aber nicht bei jeder Aktion feuern (entlastet die API)
       let progressTimer = null;
@@ -1076,6 +1160,36 @@
         if (!rankMap || !lemma) return null;
         return rankMap[lemma.toLowerCase()] || null;
       }
+      // Satz-Map (nur spanisch, für Vokabeltrainer): chunkId → [{es, en}]
+      let sentenceMap = null;
+      let sentenceMapLoading = null;
+      async function ensureSentenceMap() {
+        if (sentenceMap) return sentenceMap;
+        if (sentenceMapLoading) return sentenceMapLoading;
+        sentenceMapLoading = fetch("book-2-sentences.json?v=" + VERSION)
+          .then(r => r.ok ? r.json() : [])
+          .then(arr => {
+            sentenceMap = {};
+            for (const e of arr) sentenceMap[e.chunk_id] = e.sentences || [];
+            return sentenceMap;
+          })
+          .catch(() => { sentenceMap = {}; return {}; });
+        return sentenceMapLoading;
+      }
+      // Für ein Lemma + chunkId: gibt {es, en} des Satzes zurück, der das Lemma enthält.
+      function findSentenceWithTranslation(lemma, chunkId) {
+        if (!sentenceMap || !lemma || !chunkId) return null;
+        const sentences = sentenceMap[chunkId];
+        if (!sentences || !sentences.length) return null;
+        const lemmaLc = lemma.toLowerCase();
+        const stem = lemmaLc.length >= 5 ? lemmaLc.slice(0, Math.max(4, lemmaLc.length - 2)) : lemmaLc;
+        const isShort = lemmaLc.length <= 3;
+        const re = new RegExp("\\b(" + escapeRegex(isShort ? lemmaLc : stem) + "[a-záéíóúñü]*)\\b", "i");
+        for (const s of sentences) {
+          if (s.es && re.test(s.es)) return s;
+        }
+        return null;
+      }
       function showPopup(html, x, y) {
         dictPopup.innerHTML = html;
         dictPopup.classList.add("visible");
@@ -1236,7 +1350,9 @@
             inflected: inflEl ? inflEl.textContent.replace(/^\(von „|“\)$/g, "").trim() : null,
           };
         }
-        const added = addCard(cardEntry, chunks[idx] ? chunks[idx].A1 : null);
+        const added = addCard(cardEntry, chunks[idx] ? chunks[idx].A1 : null, chunks[idx] ? chunks[idx].id : null);
+        // Für spanische Bücher: Satz-Map lazy laden (für EN-Übersetzung der Lernsätze)
+        if (book && book.wiktionary_lang === "es") ensureSentenceMap();
         if (added) {
           // Popup neu rendern, damit der Entfernen-Button erscheint
           renderDict(lemma, cardEntry, parseInt(dictPopup.style.left), parseInt(dictPopup.style.top));
