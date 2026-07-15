@@ -254,6 +254,15 @@
       padding: 0.8rem 1rem; background: var(--card-2); border-left: 3px solid var(--accent);
       border-radius: 6px; font-style: italic;
     }
+    .review-card .detail-stats {
+      display: flex; gap: 1rem; justify-content: center; margin-top: 1rem;
+      color: var(--muted-2); font-size: 0.78rem;
+    }
+    .review-card .detail-buttons {
+      display: flex; gap: 0.8rem; justify-content: center; margin-top: 1.5rem; flex-wrap: wrap;
+    }
+    .review-card .deck-row { cursor: pointer; }
+    .review-card .deck-row:hover { background: var(--accent-soft); }
     /* Update-Banner (neue Version verfügbar) */
     #update-banner {
       position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
@@ -408,7 +417,7 @@
 
   <script>
     (function () {
-      const VERSION = "6.7";
+      const VERSION = "6.8";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -791,15 +800,16 @@
             const due = new Date(c.due);
             const now = new Date();
             const isDue = due.getTime() <= now.getTime();
+            const lemmaAttr = escapeHtml(c.lemma).replace(/"/g, '&quot;');
             listHtml +=
-              '<div class="deck-row">' +
+              '<div class="deck-row" data-lemma="' + lemmaAttr + '">' +
                 '<div class="deck-row-main">' +
                   '<span class="deck-row-lemma">' + escapeHtml(c.lemma) + '</span>' +
                   (c.reps > 0 ? ' <span class="deck-row-reps">×' + c.reps + '</span>' : '') +
                   (isDue ? ' <span class="deck-row-due">fällig</span>' : ' <span class="deck-row-future">in ' + intervalLabel(Math.max(0.5, (due.getTime() - now.getTime()) / 3600000)) + '</span>') +
                   (c.gloss ? '<div class="deck-row-gloss">' + escapeHtml(c.gloss.substring(0, 60)) + (c.gloss.length > 60 ? '…' : '') + '</div>' : '') +
                 '</div>' +
-                '<button class="deck-row-del" data-del-lemma="' + escapeHtml(c.lemma).replace(/"/g, '&quot;') + '">🗑</button>' +
+                '<button class="deck-row-del" data-del-lemma="' + lemmaAttr + '">🗑</button>' +
               '</div>';
           }
           listHtml += '</div>';
@@ -813,7 +823,8 @@
         // Lösch-Buttons binden
         const delBtns = reviewCard.querySelectorAll(".deck-row-del");
         for (const b of delBtns) {
-          b.addEventListener("click", function () {
+          b.addEventListener("click", function (e) {
+            e.stopPropagation();  // nicht auch den Detail-View öffnen
             const lemma = b.getAttribute("data-del-lemma");
             if (confirm("„" + lemma + "\" aus dem Deck löschen?")) {
               removeCard(lemma);
@@ -821,9 +832,73 @@
             }
           });
         }
+        // Ganze Reihe klickbar für Detail-View
+        const rows = reviewCard.querySelectorAll(".deck-row");
+        for (const r of rows) {
+          r.addEventListener("click", function () {
+            const lemma = r.getAttribute("data-lemma");
+            if (lemma) renderReviewDetail(lemma);
+          });
+        }
         updateBadge();
       }
-      function renderReviewCard() {
+      // Detail-View für eine einzelne Karte: alle Informationen + 🗑 + 📖 Lernen
+      function renderReviewDetail(lemma) {
+        const deck = loadDeck();
+        const c = deck[lemma];
+        if (!c) { renderReviewDone(); return; }
+        const due = new Date(c.due);
+        const now = new Date();
+        const isDue = due.getTime() <= now.getTime();
+        const dueText = isDue ? "fällig" : "in " + intervalLabel(Math.max(0.5, (due.getTime() - now.getTime()) / 3600000));
+
+        // Spanischer Satz mit hervorgehobenem Lernwort (analog renderReviewCard)
+        let sentenceHtml = "";
+        if (c.sentence && c.surfaceForm) {
+          const isSameForm = c.surfaceForm.toLowerCase() === c.lemma.toLowerCase();
+          const re = new RegExp("\\b(" + escapeRegex(c.surfaceForm) + ")\\b", "i");
+          const highlighted = escapeHtml(c.sentence).replace(re, isSameForm
+            ? '<strong class="hl-lemma">' + escapeHtml(c.surfaceForm) + '</strong>'
+            : '<strong class="hl-lemma">' + escapeHtml(c.surfaceForm) + '</strong><span class="hl-surface"> (' + escapeHtml(c.lemma) + ')</span>');
+          sentenceHtml = '<div class="vocab-sentence">' + highlighted + '</div>';
+        } else {
+          sentenceHtml = '<div class="vocab-lemma">' + escapeHtml(c.lemma) + '</div>';
+        }
+
+        reviewCard.innerHTML =
+          '<h2>🎓 Karte</h2>' +
+          '<p class="counter">' + escapeHtml(c.lemma) + '</p>' +
+          sentenceHtml +
+          (c.pos ? '<div class="vocab-pos" style="margin-top:0.5rem">' + escapeHtml(c.pos) + '</div>' : '') +
+          (c.sentence_en ? '<div class="vocab-en-sentence">' + escapeHtml(c.sentence_en) + '</div>' : '') +
+          (c.gloss ? '<div class="vocab-gloss">' + escapeHtml(c.gloss) + '</div>' : '') +
+          '<div class="detail-stats">' +
+            '<span>×' + (c.reps || 0) + ' geübt</span>' +
+            '<span>' + dueText + '</span>' +
+            '<span>Lang: ' + escapeHtml(c.lang || '?') + '</span>' +
+          '</div>' +
+          '<div class="detail-buttons">' +
+            '<button class="grade-btn" id="detail-del-btn">🗑 Löschen</button>' +
+            '<button class="grade-btn primary" id="detail-learn-btn">📖 Lernen</button>' +
+          '</div>' +
+          '<button class="close-review" id="detail-back-btn">← Zurück zur Liste</button>';
+
+        document.getElementById("detail-del-btn").addEventListener("click", function () {
+          if (confirm("„" + c.lemma + "\" aus dem Deck löschen?")) {
+            removeCard(c.lemma);
+            renderReviewDone();
+          }
+        });
+        document.getElementById("detail-learn-btn").addEventListener("click", function () {
+          // Review-Modus mit dieser Karte starten: Queue = diese Karte + alle fälligen
+          const dueCards = getDueCards();
+          const others = dueCards.filter(x => x.lemma !== c.lemma);
+          reviewQueue = [c].concat(others);
+          reviewPos = 0;
+          renderReviewCard();
+        });
+        document.getElementById("detail-back-btn").addEventListener("click", renderReviewDone);
+      }
         if (reviewPos >= reviewQueue.length) {
           // alle geschafft — zeige auch die Deck-Verwaltung
           renderReviewDone();
