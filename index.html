@@ -483,7 +483,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.3";
+      const VERSION = "7.4";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -956,7 +956,7 @@
           '<div class="detail-buttons">' +
             '<button class="grade-btn" id="detail-del-btn">🗑 Löschen</button>' +
             '<button class="grade-btn primary" id="detail-learn-btn">📖 Lernen</button>' +
-            (c.lang === "ru" ? '<button class="grade-btn" id="detail-syn-btn" title="Synonym live per GLM">🔁 Synonym</button>' : '') +
+            (c.lang === "es" ? '<button class="grade-btn" id="detail-syn-btn" title="Synonym live per GLM">🔁 Synonym</button>' : '') +
           '</div>' +
           '<button class="close-review" id="detail-back-btn">← Zurück zur Liste</button>';
 
@@ -1285,11 +1285,23 @@
         fetchWithTimeout(API + "/api/synonym", {
           method: "POST",
           headers: { "Content-Type": "application/json; charset=utf-8", "X-User-Id": userId },
-          body: JSON.stringify({ lemma: lemma, lang: "ru" }),
+          body: JSON.stringify({ lemma: lemma, lang: "es" }),
         }, 60000)
           .then(function (res) { return res.json(); })
           .then(function (data) {
             if (data.error) throw new Error(data.error);
+            // Originalrang clientseitig ergänzen, falls der Worker ihn nicht liefert
+            // (für 'es' steht keine words-Tabelle in D1 → Rang aus es_ranks.json).
+            if (data.orig_rank == null) {
+              return ensureRankMap().then(function () {
+                const r = rankForLemma(lemma);
+                if (r != null) data.orig_rank = r;
+                return data;
+              });
+            }
+            return data;
+          })
+          .then(function (data) {
             const syn = (data.synonym || "").trim();
             let body;
             if (!syn) {
@@ -1488,9 +1500,21 @@
         if (entry.lemma && rankMap) {
           const r = rankForLemma(entry.lemma);
           if (r != null) entry.rank = r;
+        } else if (entry.lemma && lang === "es") {
+          // Map lädt noch (erster Klick) — kurz warten, sonst würde fälschlich
+          // "-" angezeigt obwohl das Wort in der Liste ist.
+          await ensureRankMap();
+          const r = rankForLemma(entry.lemma);
+          if (r != null) entry.rank = r;
         }
         // Form-Rang dazuschreiben (gebeugte Form, OpenSubtitles, spanisch).
         if (formRankMap) {
+          const fr = rankForForm(word);
+          if (fr != null) entry.filmRank = fr;
+        } else if (lang === "es") {
+          // Map lädt noch (erster Klick) — kurz warten, sonst würde fälschlich
+          // "-" angezeigt obwohl das Wort in der Liste ist.
+          await ensureFormRankMap();
           const fr = rankForForm(word);
           if (fr != null) entry.filmRank = fr;
         }
@@ -1540,12 +1564,12 @@
         else {
           html = '<div class="dw"><span class="lemma">' + entry.lemma + '</span>';
           if (entry.inflected) html += '<span class="inflected">(von „' + entry.inflected + '")</span>';
-          // Rang-Badges, falls vorhanden (nur spanische Bücher haben eine Frequenzliste)
-          if (entry.rank != null) {
-            html += '<span class="rank-badge">Kelly Rang ' + entry.rank + '</span>';
-          }
-          if (entry.filmRank != null) {
-            html += '<span class="rank-badge film-badge">Film Rang ' + entry.filmRank + '</span>';
+          // Rang-Badges (nur spanische Bücher haben Frequenzlisten).
+          // Format "Label: rang / total" mit 1000er-Punkt; "-" wenn nicht in Liste.
+          if (wiktLang() === "es") {
+            const fmt = n => (n == null ? "-" : n.toLocaleString("de-DE"));
+            html += '<span class="rank-badge">Kelly Rang: ' + fmt(entry.rank) + '/8.535</span>';
+            html += '<span class="rank-badge film-badge">OpenSubtitles Rang: ' + fmt(entry.filmRank) + '/50.000</span>';
           }
           html += '</div>';
           if (entry.pos) html += '<div class="pos">' + entry.pos + '</div>';
