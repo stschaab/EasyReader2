@@ -263,6 +263,58 @@
     }
     .review-card .deck-row { cursor: pointer; }
     .review-card .deck-row:hover { background: var(--accent-soft); }
+
+    /* Synonym-Popup (über dem Review-Overlay) */
+    .syn-overlay {
+      position: fixed; inset: 0; z-index: 160;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex; align-items: center; justify-content: center;
+      padding: 1.2rem;
+    }
+    .syn-overlay.hidden { display: none; }
+    .syn-popup {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 1.3rem; max-width: 360px; width: 100%;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); position: relative;
+      font-family: inherit;
+    }
+    .syn-popup .syn-head {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 0.8rem;
+    }
+    .syn-popup .syn-title { font-size: 0.78rem; color: var(--muted-2); text-transform: uppercase; letter-spacing: 0.05em; }
+    .syn-popup .syn-close {
+      background: transparent; border: none; color: var(--muted);
+      font-size: 1.3rem; cursor: pointer; padding: 0 0.3rem; line-height: 1;
+    }
+    .syn-popup .syn-close:hover { color: var(--accent); }
+    .syn-popup .syn-loading {
+      text-align: center; color: var(--muted); padding: 1.2rem 0; line-height: 1.6;
+    }
+    .syn-popup .syn-loading .icon {
+      display: inline-block; animation: spin 1s linear infinite; font-size: 1.6rem;
+    }
+    .syn-popup .syn-loading .hint { font-size: 0.75rem; color: var(--muted-2); }
+    .syn-popup .syn-error { color: var(--text); line-height: 1.5; }
+    .syn-popup .syn-error .icon { font-size: 1.3rem; }
+    .syn-popup .syn-error .msg { font-size: 0.8rem; color: var(--muted-2); display: block; margin-top: 0.3rem; }
+    .syn-popup .syn-error .retry { font-size: 0.72rem; color: var(--muted-2); display: block; margin-top: 0.8rem; }
+    .syn-popup .syn-word {
+      font-size: 1.4rem; font-weight: 700; color: var(--accent); margin-bottom: 0.2rem;
+    }
+    .syn-popup .syn-arrow { color: var(--muted-2); font-size: 1.1rem; margin: 0.2rem 0; }
+    .syn-popup .syn-gloss { color: var(--text); font-size: 0.92rem; line-height: 1.4; }
+    .syn-popup .syn-meta {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.9rem;
+      font-size: 0.78rem; color: var(--muted);
+    }
+    .syn-popup .syn-meta .badge {
+      background: var(--accent-soft); color: var(--accent);
+      padding: 0.15rem 0.55rem; border-radius: 999px; font-weight: 600;
+    }
+    .syn-popup .syn-meta .rank { color: var(--muted-2); }
+    .syn-popup .syn-note { color: var(--muted); font-size: 0.78rem; font-style: italic; margin-top: 0.7rem; }
+    .syn-popup .syn-empty { color: var(--muted); line-height: 1.5; }
     /* Update-Banner (neue Version verfügbar) */
     #update-banner {
       position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
@@ -386,6 +438,13 @@
       </div>
     </div>
 
+    <!-- Synonym-Popup (live GLM, Test der Kette WebApp→Worker→GLM) -->
+    <div class="syn-overlay hidden" id="syn-overlay">
+      <div class="syn-popup" id="syn-popup">
+        <!-- wird per JS gefüllt -->
+      </div>
+    </div>
+
     <nav class="levels" id="levels" style="display:none"></nav>
 
     <main>
@@ -419,7 +478,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.1";
+      const VERSION = "7.2";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -560,6 +619,8 @@
       dueBadgeEl = document.getElementById("due-badge");
       const reviewOverlay = document.getElementById("review-overlay");
       const reviewCard = document.getElementById("review-card");
+      const synOverlay = document.getElementById("syn-overlay");
+      const synPopup = document.getElementById("syn-popup");
       // Topbar-Buttons im Review-Overlay: 📚 zur Bibliothek, ✕ schließen
       document.getElementById("review-close-btn").addEventListener("click", closeReview);
       document.getElementById("review-deck-btn").addEventListener("click", renderReviewDone);
@@ -850,6 +911,10 @@
         const deck = loadDeck();
         const c = deck[lemma];
         if (!c) { renderReviewDone(); return; }
+        // Alle Karten sortiert (gleiche Reihenfolge wie die Liste)
+        const allCards = Object.values(deck).sort((a, b) => (a.added || "").localeCompare(b.added || ""));
+        const posInDeck = allCards.findIndex(x => x.lemma === lemma);
+        const total = allCards.length;
         const due = new Date(c.due);
         const now = new Date();
         const isDue = due.getTime() <= now.getTime();
@@ -869,8 +934,11 @@
         }
 
         reviewCard.innerHTML =
-          '<h2>🎓 Karte</h2>' +
-          '<p class="counter">' + escapeHtml(c.lemma) + '</p>' +
+          '<h2>🎓 Karte <span class="counter" style="float:right;font-size:0.85rem">' + (posInDeck + 1) + ' / ' + total + '</span></h2>' +
+          '<div class="nav-buttons" style="margin-top:0.5rem">' +
+            '<button class="grade-btn" id="detail-prev-btn"' + (posInDeck <= 0 ? ' disabled' : '') + '>‹ Zurück</button>' +
+            '<button class="grade-btn" id="detail-next-btn"' + (posInDeck >= total - 1 ? ' disabled' : '') + '>Weiter ›</button>' +
+          '</div>' +
           sentenceHtml +
           (c.pos ? '<div class="vocab-pos" style="margin-top:0.5rem">' + escapeHtml(c.pos) + '</div>' : '') +
           (c.sentence_en ? '<div class="vocab-en-sentence">' + escapeHtml(c.sentence_en) + '</div>' : '') +
@@ -883,6 +951,7 @@
           '<div class="detail-buttons">' +
             '<button class="grade-btn" id="detail-del-btn">🗑 Löschen</button>' +
             '<button class="grade-btn primary" id="detail-learn-btn">📖 Lernen</button>' +
+            (c.lang === "es" ? '<button class="grade-btn" id="detail-syn-btn" title="Synonym live per GLM">🔁 Synonym</button>' : '') +
           '</div>' +
           '<button class="close-review" id="detail-back-btn">← Zurück zur Liste</button>';
 
@@ -892,6 +961,19 @@
             renderReviewDone();
           }
         });
+        // Vor/Zurück im Detail-View: wechselt zur vorherigen/nächsten Karte der Liste
+        const prevBtn = document.getElementById("detail-prev-btn");
+        const nextBtn = document.getElementById("detail-next-btn");
+        if (prevBtn && !prevBtn.disabled) {
+          prevBtn.addEventListener("click", function () {
+            if (posInDeck > 0) renderReviewDetail(allCards[posInDeck - 1].lemma);
+          });
+        }
+        if (nextBtn && !nextBtn.disabled) {
+          nextBtn.addEventListener("click", function () {
+            if (posInDeck < total - 1) renderReviewDetail(allCards[posInDeck + 1].lemma);
+          });
+        }
         document.getElementById("detail-learn-btn").addEventListener("click", function () {
           // Review-Modus mit dieser Karte starten: Queue = diese Karte + alle fälligen
           const dueCards = getDueCards();
@@ -900,6 +982,8 @@
           reviewPos = 0;
           renderReviewCard();
         });
+        const synBtn = document.getElementById("detail-syn-btn");
+        if (synBtn) synBtn.addEventListener("click", function () { fetchSynonym(c.lemma); });
         document.getElementById("detail-back-btn").addEventListener("click", renderReviewDone);
       }
       function renderReviewCard() {
@@ -944,10 +1028,6 @@
             '<button class="grade-btn" data-interval="0.5">🔄 ½ h</button>' +
             '<button class="grade-btn" data-interval="24">1 Tag</button>' +
             '<button class="grade-btn primary" data-interval="' + newDouble + '">2× (' + intervalLabel(newDouble) + ')</button>' +
-          '</div>' +
-          '<div class="nav-buttons">' +
-            '<button class="grade-btn" id="card-prev-btn"' + (reviewPos === 0 ? ' disabled' : '') + '>‹ Zurück</button>' +
-            '<button class="grade-btn" id="card-next-btn"' + (reviewPos >= total - 1 ? ' disabled' : '') + '>Weiter ›</button>' +
           '</div>';
         reviewCard.innerHTML = cardHtml;
 
@@ -969,19 +1049,6 @@
             gradeCard(c.lemma, newI);
             reviewPos++;
             renderReviewCard();
-          });
-        }
-        // Vor/Zurück-Buttons (Scrollen ohne Bewerten)
-        const prevBtn = document.getElementById("card-prev-btn");
-        const nextBtn = document.getElementById("card-next-btn");
-        if (prevBtn && !prevBtn.disabled) {
-          prevBtn.addEventListener("click", function () {
-            if (reviewPos > 0) { reviewPos--; renderReviewCard(); }
-          });
-        }
-        if (nextBtn && !nextBtn.disabled) {
-          nextBtn.addEventListener("click", function () {
-            if (reviewPos < reviewQueue.length - 1) { reviewPos++; renderReviewCard(); }
           });
         }
         // Autoplay: wenn aktiviert, Satz automatisch beim Kartenwechsel vorlesen
@@ -1181,6 +1248,85 @@
                 '<br><span style="font-size:0.8rem;color:var(--muted-2)">' + msg + '</span>' +
                 '<br><br><span style="font-size:0.75rem;color:var(--muted-2)">Nochmal auf ' + lvl + ' tippen</span>';
             }
+          });
+      }
+
+      // ─── Synonym-Funktion (live GLM, Test der Kette WebApp→Worker→GLM) ───
+      function showSynPopup(html) {
+        synPopup.innerHTML = html;
+        synOverlay.classList.remove("hidden");
+      }
+      function hideSynPopup() { synOverlay.classList.add("hidden"); }
+      // Hintergrund-Tap und Schließen-X (delegiert, da Inhalt pro Aufruf neu gesetzt)
+      synOverlay.addEventListener("click", function (e) {
+        if (e.target === synOverlay || e.target.classList.contains("syn-close")) hideSynPopup();
+      });
+      // Rang-Badge-HTML: "Rang 1234 · B2" oder "Rang unbekannt"
+      function synRankBadge(rank, cefr) {
+        if (rank == null) return '<span class="rank">Rang unbekannt</span>';
+        return '<span class="rank">Rang ' + rank + (cefr ? ' · ' + cefr : '') + '</span>';
+      }
+      function fetchSynonym(lemma) {
+        // Sofort Spinner zeigen
+        showSynPopup(
+          '<div class="syn-head"><span class="syn-title">Synonym</span>' +
+            '<button class="syn-close" title="Schließen">✕</button></div>' +
+          '<div class="syn-loading">' +
+            '<span class="icon">⚙️</span><br>' +
+            'Suche einfacheres Synonym für „<strong>' + escapeHtml(lemma) + '</strong>"…' +
+            '<br><span class="hint">GLM live · kann 20s dauern</span>' +
+          '</div>'
+        );
+        fetchWithTimeout(API + "/api/synonym", {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8", "X-User-Id": userId },
+          body: JSON.stringify({ lemma: lemma, lang: "es" }),
+        }, 60000)
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            if (data.error) throw new Error(data.error);
+            const syn = (data.synonym || "").trim();
+            let body;
+            if (!syn) {
+              // Kein passendes Synonym gefunden
+              const origInfo = data.orig_rank != null
+                ? ' (Original: Rang ' + data.orig_rank + (data.orig_cefr ? ' · ' + data.orig_cefr : '') + ')'
+                : '';
+              body =
+                '<div class="syn-word">' + escapeHtml(lemma) + '</div>' +
+                '<div class="syn-empty">Kein einfacheres Synonym gefunden, das die Bedeutung erhält.' + origInfo + '</div>';
+            } else {
+              const easier = (data.syn_rank != null && data.orig_rank != null && data.syn_rank < data.orig_rank);
+              body =
+                '<div class="syn-word">' + escapeHtml(lemma) + '</div>' +
+                '<div class="syn-arrow">↓ einfacheres Synonym</div>' +
+                '<div class="syn-word">' + escapeHtml(syn) + '</div>' +
+                (data.en_syn ? '<div class="syn-gloss">' + escapeHtml(data.en_syn) + '</div>' : '') +
+                '<div class="syn-meta">' +
+                  (data.semantic_pct != null ? '<span class="badge">' + data.semantic_pct + '% Bedeutung</span>' : '') +
+                  (easier ? '<span class="badge">✓ häufiger</span>' : '') +
+                  synRankBadge(data.orig_rank, data.orig_cefr) +
+                  (data.syn_rank != null ? '<span class="rank">→ Rang ' + data.syn_rank + (data.syn_cefr ? ' · ' + data.syn_cefr : '') + '</span>' : '') +
+                '</div>' +
+                (data.note ? '<div class="syn-note">' + escapeHtml(data.note) + '</div>' : '');
+            }
+            showSynPopup(
+              '<div class="syn-head"><span class="syn-title">Synonym · live GLM</span>' +
+                '<button class="syn-close" title="Schließen">✕</button></div>' +
+              body
+            );
+          })
+          .catch(function (err) {
+            const msg = err.message === "Timeout" ? "Zeitüberschreitung." : (err.message || "Fehler");
+            showSynPopup(
+              '<div class="syn-head"><span class="syn-title">Synonym</span>' +
+                '<button class="syn-close" title="Schließen">✕</button></div>' +
+              '<div class="syn-error">' +
+                '<span class="icon">⚠️</span> Fehler bei der Synonym-Suche.' +
+                '<span class="msg">' + escapeHtml(msg) + '</span>' +
+                '<span class="retry">Nochmal auf 🔁 tippen</span>' +
+              '</div>'
+            );
           });
       }
 
