@@ -417,7 +417,7 @@
 
   <script>
     (function () {
-      const VERSION = "6.8";
+      const VERSION = "6.9";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -693,6 +693,7 @@
             let label;
             if (lvl === "original") label = "Original";
             else if (lvl === "EN") label = "EN";
+            else if (lvl === "EN-A1") label = "EN-A1";
             else if (CEFR_LEVELS.indexOf(lvl) >= 0) label = lvl;
             else label = lvl + " W.";
             b.textContent = label;
@@ -1100,9 +1101,9 @@
         if (level === "original") {
           textEl.className = "chunk-text";
           textEl.innerHTML = wrapWords(p.original);
-        } else if (level === "EN") {
+        } else if (level === "EN" || level === "EN-A1") {
           // Englische Übersetzung: als Klartext ohne anklickbare Wörter (kein Wörterbuch auf EN)
-          const val = p.EN;
+          const val = p[level];
           if (val && val.trim()) {
             textEl.className = "chunk-text";
             textEl.textContent = val;  // textContent = kein HTML, keine Wraps
@@ -1409,7 +1410,7 @@
         if (!dictPopup.contains(e.target) && !e.target.closest(".word")) hidePopup();
       });
       // Lernen-Button im Popup (delegated, da Popup-HTML bei jedem lookUp neu gebaut wird)
-      dictPopup.addEventListener("click", function (e) {
+      dictPopup.addEventListener("click", async function (e) {
         const btn = e.target.closest(".learn-btn");
         if (!btn || btn.disabled) return;
         const lemma = btn.getAttribute("data-lemma");
@@ -1428,9 +1429,9 @@
             inflected: inflEl ? inflEl.textContent.replace(/^\(von „|“\)$/g, "").trim() : null,
           };
         }
+        // Für spanische Bücher: Satz-Map vor dem Speichern abwarten (sonst Race-Condition)
+        if (book && book.wiktionary_lang === "es") await ensureSentenceMap();
         const added = addCard(cardEntry, chunks[idx] ? chunks[idx].A1 : null, chunks[idx] ? chunks[idx].id : null);
-        // Für spanische Bücher: Satz-Map lazy laden (für EN-Übersetzung der Lernsätze)
-        if (book && book.wiktionary_lang === "es") ensureSentenceMap();
         if (added) {
           // Popup neu rendern, damit der Entfernen-Button erscheint
           renderDict(lemma, cardEntry, parseInt(dictPopup.style.left), parseInt(dictPopup.style.top));
@@ -1506,7 +1507,7 @@
         const p = chunks[idx];
         // TTS bei EN-Übersetzung überspringen: englischer Text in spanischer Stimme ergibt keinen Sinn,
         // und wir können keine englische Stimme garantieren.
-        if (level === "EN") {
+        if (level === "EN" || level === "EN-A1") {
           if (!autoplay) alert("Vorlesen ist nur für Original und A2 verfügbar, nicht für die englische Übersetzung.");
           return false;
         }
