@@ -364,6 +364,7 @@
     <div class="review-overlay hidden" id="review-overlay">
       <div class="review-topbar">
         <button class="review-topbar-btn" id="review-lib-btn" title="Zur Bibliothek">📚</button>
+        <button class="review-topbar-btn" id="review-deck-btn" title="Alle Karten (Liste)">📋</button>
         <label class="review-autoplay-label" title="Satz automatisch vorlesen beim Kartenwechsel">
           <input type="checkbox" id="review-autoplay-cb"> Autoplay
         </label>
@@ -407,7 +408,7 @@
 
   <script>
     (function () {
-      const VERSION = "6.6";
+      const VERSION = "6.7";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -550,6 +551,7 @@
       const reviewCard = document.getElementById("review-card");
       // Topbar-Buttons im Review-Overlay: 📚 zur Bibliothek, ✕ schließen
       document.getElementById("review-close-btn").addEventListener("click", closeReview);
+      document.getElementById("review-deck-btn").addEventListener("click", renderReviewDone);
       document.getElementById("review-autoplay-cb").addEventListener("change", function (e) {
         reviewAutoplay = e.target.checked;
         if (!reviewAutoplay && reviewTTSspeaking && window.speechSynthesis) window.speechSynthesis.cancel();
