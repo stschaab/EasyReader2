@@ -417,7 +417,7 @@
 
   <script>
     (function () {
-      const VERSION = "6.9";
+      const VERSION = "7.0";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -907,103 +907,70 @@
           return;
         }
         const c = reviewQueue[reviewPos];
-        reviewFlipped = false;
         const total = reviewQueue.length;
-        // Vorderseite: Mini-Satz (falls vorhanden) mit Grundform hervorgehoben,
-        // sonst isoliertes Lemma (Fallback).
-        let frontHtml;
+
+        // Spanischer Satz mit hervorgehobenem Lernwort (oder Lemma als Fallback)
+        let esHtml;
         if (c.sentence && c.surfaceForm) {
-          // Ersetze das erste Vorkommen der Surface-Form im Satz durch Highlight.
-          // Grundform hervorheben; falls Surface-Form abweicht, in Klammern dazu.
           const surfaceLc = c.surfaceForm.toLowerCase();
           const lemmaLc = c.lemma.toLowerCase();
           const isSameForm = surfaceLc === lemmaLc;
           const re = new RegExp("\\b(" + escapeRegex(c.surfaceForm) + ")\\b", "i");
-          const highlighted = escapeHtml(c.sentence).replace(re, function (m) {
-            // m ist das Original-Vorkommen (mit Originalgroßschreibung).
-            // Hervorgehoben wird die Form, wie sie im Satz steht (Beugung);
-            // in Klammern die Grundform (das zu Lernende), falls abweichend.
-            const inner = isSameForm
-              ? '<strong class="hl-lemma">' + escapeHtml(c.surfaceForm) + '</strong>'
-              : '<strong class="hl-lemma">' + escapeHtml(c.surfaceForm) + '</strong>' +
-                '<span class="hl-surface"> (' + escapeHtml(c.lemma) + ')</span>';
-            return inner;
-          });
-          frontHtml =
-            '<div class="vocab-sentence">' + highlighted + '</div>' +
-            (c.pos ? '<div class="vocab-pos" style="margin-top:0.6rem">' + escapeHtml(c.pos) + '</div>' : '');
+          const highlighted = escapeHtml(c.sentence).replace(re, isSameForm
+            ? '<strong class="hl-lemma">' + escapeHtml(c.surfaceForm) + '</strong>'
+            : '<strong class="hl-lemma">' + escapeHtml(c.surfaceForm) + '</strong><span class="hl-surface"> (' + escapeHtml(c.lemma) + ')</span>');
+          esHtml = '<div class="vocab-sentence">' + highlighted + '</div>';
         } else {
-          frontHtml =
-            '<div class="vocab-lemma">' + escapeHtml(c.lemma) + '</div>' +
-            (c.pos ? '<div class="vocab-pos">' + escapeHtml(c.pos) + '</div>' : '') +
-            (c.inflected ? '<div class="vocab-inflected">(Form im Text: „' + escapeHtml(c.inflected) + '")</div>' : '');
+          esHtml = '<div class="vocab-lemma">' + escapeHtml(c.lemma) + '</div>';
         }
+
+        // Bewertungs-Buttons
+        const currentInterval = c.interval_hours || 0;
+        const newDouble = Math.max(currentInterval * 2, 24);
+
         const cardHtml =
           '<h2>🎓 Üben <button class="card-delete-btn" id="card-delete-btn" title="Diese Karte löschen">🗑</button></h2>' +
           '<p class="counter">Karte ' + (reviewPos + 1) + ' / ' + total + '</p>' +
           '<div class="card-front-row">' +
-            frontHtml +
+            esHtml +
             '<button class="card-tts-btn" id="card-tts-btn" title="Satz vorlesen">🔊</button>' +
           '</div>' +
-          '<div id="flip-area"></div>';
+          (c.pos ? '<div class="vocab-pos" style="margin-top:0.5rem">' + escapeHtml(c.pos) + '</div>' : '') +
+          (c.sentence_en ? '<div class="vocab-en-sentence">' + escapeHtml(c.sentence_en) + '</div>' : '') +
+          (c.gloss ? '<div class="vocab-gloss">' + escapeHtml(c.gloss) + '</div>' : '') +
+          '<div class="grade-buttons">' +
+            '<button class="grade-btn" data-interval="0.5">🔄 ½ h</button>' +
+            '<button class="grade-btn" data-interval="24">1 Tag</button>' +
+            '<button class="grade-btn primary" data-interval="' + newDouble + '">2× (' + intervalLabel(newDouble) + ')</button>' +
+          '</div>';
         reviewCard.innerHTML = cardHtml;
+
         document.getElementById("card-delete-btn").addEventListener("click", function () {
           if (confirm("„" + c.lemma + "\" aus dem Deck löschen?")) {
             removeCard(c.lemma);
-            // Karte aus Queue entfernen und nächste zeigen
             reviewQueue.splice(reviewPos, 1);
             renderReviewCard();
           }
         });
-        // 🔊-Button: spielt den Lernsatz (oder Lemma als Fallback) in der Karten-Sprache
         document.getElementById("card-tts-btn").addEventListener("click", function () {
           const text = (c.sentence && c.surfaceForm) ? c.sentence : c.lemma;
           playCardText(text, c.lang || "es");
         });
-        renderFlipArea(c);
+        const btns = reviewCard.querySelectorAll(".grade-btn[data-interval]");
+        for (const b of btns) {
+          b.addEventListener("click", function () {
+            const newI = parseFloat(b.getAttribute("data-interval"));
+            gradeCard(c.lemma, newI);
+            reviewPos++;
+            renderReviewCard();
+          });
+        }
         // Autoplay: wenn aktiviert, Satz automatisch beim Kartenwechsel vorlesen
         if (reviewAutoplay) {
           setTimeout(function () {
             const text = (c.sentence && c.surfaceForm) ? c.sentence : c.lemma;
             playCardText(text, c.lang || "es");
           }, 300);
-        }
-      }
-      function renderFlipArea(c) {
-        const flipArea = document.getElementById("flip-area");
-        if (!reviewFlipped) {
-          // Vorderseite: nur Aufdecken-Button
-          flipArea.innerHTML = '<button class="grade-btn primary" id="flip-btn" style="margin-top:1.5rem">Aufdecken</button>';
-          document.getElementById("flip-btn").addEventListener("click", function () {
-            reviewFlipped = true;
-            renderFlipArea(c);
-          });
-        } else {
-          // Rückseite: Gloss + englischer Lernsatz (falls vorhanden) + 3 Interval-Buttons
-          const currentInterval = c.interval_hours || 0;
-          const newDouble = Math.max(currentInterval * 2, 24);  // mind. 1 Tag
-          let backHtml =
-            '<div class="vocab-gloss">' + escapeHtml(c.gloss || '(keine Definition)') + '</div>';
-          // Englischer Lernsatz (nur spanisch, falls beim Sammeln gespeichert)
-          if (c.sentence_en) {
-            backHtml += '<div class="vocab-en-sentence">' + escapeHtml(c.sentence_en) + '</div>';
-          }
-          backHtml +=
-            '<div class="grade-buttons">' +
-              '<button class="grade-btn" data-interval="0.5">🔄 ½ h</button>' +
-              '<button class="grade-btn" data-interval="24">1 Tag</button>' +
-              '<button class="grade-btn primary" data-interval="' + newDouble + '">2× (' + intervalLabel(newDouble) + ')</button>' +
-            '</div>';
-          flipArea.innerHTML = backHtml;
-          const btns = flipArea.querySelectorAll(".grade-btn[data-interval]");
-          for (const b of btns) {
-            b.addEventListener("click", function () {
-              const newI = parseFloat(b.getAttribute("data-interval"));
-              gradeCard(c.lemma, newI);
-              reviewPos++;
-              renderReviewCard();
-            });
-          }
         }
       }
       function escapeHtml(s) {
