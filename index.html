@@ -288,6 +288,8 @@
       to { transform: translateX(-50%) translateY(0); opacity: 1; }
     }
     .review-card .grade-buttons { display: flex; gap: 0.6rem; justify-content: center; margin-top: 1.5rem; flex-wrap: wrap; }
+    .review-card .nav-buttons { display: flex; gap: 0.6rem; justify-content: center; margin-top: 0.8rem; }
+    .review-card .nav-buttons .grade-btn:disabled { opacity: 0.35; cursor: default; }
     .review-card .grade-btn {
       padding: 0.6rem 1rem; font-size: 0.85rem; font-weight: 600;
       background: var(--card); border: 1px solid var(--border); color: var(--text);
@@ -417,7 +419,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.0";
+      const VERSION = "7.1";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -536,7 +538,7 @@
       }
       function intervalLabel(hours) {
         if (hours < 1) return Math.round(hours * 60) + " min";
-        if (hours < 24) return hours + " h";
+        if (hours < 24) return hours.toFixed(1).replace(/\.0$/, "") + " h";
         const d = Math.round(hours / 24);
         return d + " Tag" + (d === 1 ? "" : "e");
       }
@@ -942,6 +944,10 @@
             '<button class="grade-btn" data-interval="0.5">🔄 ½ h</button>' +
             '<button class="grade-btn" data-interval="24">1 Tag</button>' +
             '<button class="grade-btn primary" data-interval="' + newDouble + '">2× (' + intervalLabel(newDouble) + ')</button>' +
+          '</div>' +
+          '<div class="nav-buttons">' +
+            '<button class="grade-btn" id="card-prev-btn"' + (reviewPos === 0 ? ' disabled' : '') + '>‹ Zurück</button>' +
+            '<button class="grade-btn" id="card-next-btn"' + (reviewPos >= total - 1 ? ' disabled' : '') + '>Weiter ›</button>' +
           '</div>';
         reviewCard.innerHTML = cardHtml;
 
@@ -963,6 +969,19 @@
             gradeCard(c.lemma, newI);
             reviewPos++;
             renderReviewCard();
+          });
+        }
+        // Vor/Zurück-Buttons (Scrollen ohne Bewerten)
+        const prevBtn = document.getElementById("card-prev-btn");
+        const nextBtn = document.getElementById("card-next-btn");
+        if (prevBtn && !prevBtn.disabled) {
+          prevBtn.addEventListener("click", function () {
+            if (reviewPos > 0) { reviewPos--; renderReviewCard(); }
+          });
+        }
+        if (nextBtn && !nextBtn.disabled) {
+          nextBtn.addEventListener("click", function () {
+            if (reviewPos < reviewQueue.length - 1) { reviewPos++; renderReviewCard(); }
           });
         }
         // Autoplay: wenn aktiviert, Satz automatisch beim Kartenwechsel vorlesen
