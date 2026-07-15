@@ -179,6 +179,11 @@
       color: var(--muted-2); font-size: 0.7rem; font-weight: 600;
       background: var(--card); border: 1px solid var(--border);
       padding: 0.1rem 0.4rem; border-radius: 6px; white-space: nowrap;
+      margin-left: 0.3rem;
+    }
+    .dict-popup .rank-badge.film-badge {
+      color: var(--accent); border-color: var(--accent);
+      background: var(--accent-soft);
     }
     .dict-popup .pos { color: var(--muted-2); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; }
     .dict-popup .gloss { color: var(--text); line-height: 1.45; }
@@ -478,7 +483,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.2";
+      const VERSION = "7.3";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -951,7 +956,7 @@
           '<div class="detail-buttons">' +
             '<button class="grade-btn" id="detail-del-btn">🗑 Löschen</button>' +
             '<button class="grade-btn primary" id="detail-learn-btn">📖 Lernen</button>' +
-            (c.lang === "es" ? '<button class="grade-btn" id="detail-syn-btn" title="Synonym live per GLM">🔁 Synonym</button>' : '') +
+            (c.lang === "ru" ? '<button class="grade-btn" id="detail-syn-btn" title="Synonym live per GLM">🔁 Synonym</button>' : '') +
           '</div>' +
           '<button class="close-review" id="detail-back-btn">← Zurück zur Liste</button>';
 
@@ -1280,7 +1285,7 @@
         fetchWithTimeout(API + "/api/synonym", {
           method: "POST",
           headers: { "Content-Type": "application/json; charset=utf-8", "X-User-Id": userId },
-          body: JSON.stringify({ lemma: lemma, lang: "es" }),
+          body: JSON.stringify({ lemma: lemma, lang: "ru" }),
         }, 60000)
           .then(function (res) { return res.json(); })
           .then(function (data) {
@@ -1371,6 +1376,23 @@
         if (!rankMap || !lemma) return null;
         return rankMap[lemma.toLowerCase()] || null;
       }
+      // Form-Rang (gebeugte Form, OpenSubtitles, spanisch). Komplementär zum
+      // Lemma-Rang: spiegelt Häufigkeit der KONKRETEN Beugung, nicht des Lemmas.
+      let formRankMap = null;
+      let formRankMapLoading = null;
+      async function ensureFormRankMap() {
+        if (formRankMap) return formRankMap;
+        if (formRankMapLoading) return formRankMapLoading;
+        formRankMapLoading = fetch("es_form_ranks.json?v=" + VERSION)
+          .then(r => r.ok ? r.json() : {})
+          .then(j => { formRankMap = j; return j; })
+          .catch(() => { formRankMap = {}; return {}; });
+        return formRankMapLoading;
+      }
+      function rankForForm(form) {
+        if (!formRankMap || !form) return null;
+        return formRankMap[form.toLowerCase()] || null;
+      }
       // Satz-Map (nur spanisch, für Vokabeltrainer): chunkId → [{es, en}]
       let sentenceMap = null;
       let sentenceMapLoading = null;
@@ -1444,7 +1466,7 @@
         showPopup('<div class="loading">Suche „' + word + '"…</div>', x, y);
         // Frequenzränge lazy laden (parallel, blockiert den LookUp nicht).
         // Nur relevant für spanische Bücher — andere Sprachen haben wir nicht.
-        if (lang === "es") ensureRankMap();
+        if (lang === "es") { ensureRankMap(); ensureFormRankMap(); }
         // Cache: sowohl Originalform als auch lowercase-Variante prüfen.
         // (Wörter am Satzanfang sind großgeschrieben, Wiktionary hat Lemmata aber klein.)
         if (dictCache[word]) { renderDict(word, dictCache[word], x, y); return; }
@@ -1466,6 +1488,11 @@
         if (entry.lemma && rankMap) {
           const r = rankForLemma(entry.lemma);
           if (r != null) entry.rank = r;
+        }
+        // Form-Rang dazuschreiben (gebeugte Form, OpenSubtitles, spanisch).
+        if (formRankMap) {
+          const fr = rankForForm(word);
+          if (fr != null) entry.filmRank = fr;
         }
         dictCache[word] = entry;
         if (entry.foundLemma) dictCache[entry.foundLemma.toLowerCase()] = entry;  // lowercase-Variante auch cachen
@@ -1513,9 +1540,12 @@
         else {
           html = '<div class="dw"><span class="lemma">' + entry.lemma + '</span>';
           if (entry.inflected) html += '<span class="inflected">(von „' + entry.inflected + '")</span>';
-          // Rang-Badge, falls vorhanden (nur spanische Bücher haben eine Frequenzliste)
+          // Rang-Badges, falls vorhanden (nur spanische Bücher haben eine Frequenzliste)
           if (entry.rank != null) {
-            html += '<span class="rank-badge">Rang ' + entry.rank + '</span>';
+            html += '<span class="rank-badge">Kelly Rang ' + entry.rank + '</span>';
+          }
+          if (entry.filmRank != null) {
+            html += '<span class="rank-badge film-badge">Film Rang ' + entry.filmRank + '</span>';
           }
           html += '</div>';
           if (entry.pos) html += '<div class="pos">' + entry.pos + '</div>';
