@@ -168,8 +168,11 @@
     .dict-popup {
       position: fixed; z-index: 100;
       background: var(--card-2); border: 1px solid var(--accent);
-      border-radius: 12px; padding: 1.3rem 1.6rem; max-width: 494px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); font-size: 1.3rem; display: none;
+      border-radius: 12px; padding: 1.3rem 1.6rem;
+      /* Responsive: auf dem PC bis 494px, auf dem Handy nicht breiter als der
+         Viewport minus Rand (verhindert Überlappung auf schmalen Bildschirmen). */
+      max-width: 494px; width: min(494px, calc(100vw - 20px));
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); font-size: 1rem; display: none;
     }
     .dict-popup.visible { display: block; }
     .dict-popup .dw { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.3rem; }
@@ -483,7 +486,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.5";
+      const VERSION = "7.6";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -510,6 +513,15 @@
       // des Lemmas enthält. Liefert { sentence, surfaceForm } oder null.
       // Matching-Strategie: Wortgrenzen-treues Lowercase-Matching auf den Lemma-Stamm.
       // Für sehr kurze Lemmata (≤ 3 Buchstaben) exaktes Matching, sonst Stamm-Matching.
+      // Stamm für Satz-Matching: nimmt das Lemma bis auf das letzte Zeichen.
+      // So bleiben Beugungssuffixe matchbar (muralla→murall → murallas),
+      // aber ähnliche kurze Wörter greifen nicht ineinander (hierba→hierb ≠ hierro).
+      // Sehr kurze Lemmata (≤3) werden direkt matchend verwendet, weil Kürzung
+      // hier zu viele false positives liefert.
+      function lemmaStem(lemmaLc) {
+        if (lemmaLc.length <= 3) return lemmaLc;
+        return lemmaLc.slice(0, Math.max(4, lemmaLc.length - 1));
+      }
       function findMiniSentence(lemma, a1Text) {
         if (!lemma || !a1Text) return null;
         const lemmaLc = lemma.toLowerCase();
@@ -518,14 +530,12 @@
           if (i % 2 === 0 && part.trim()) acc.push((part + (arr[i + 1] || "")).trim());
           return acc;
         }, []);
-        // Stamm: erste 4+ Zeichen des Lemmas, mind. 4, für Stamm-Matching
-        const stem = lemmaLc.length >= 5 ? lemmaLc.slice(0, Math.max(4, lemmaLc.length - 2)) : lemmaLc;
-        const isShort = lemmaLc.length <= 3;
+        const stem = lemmaStem(lemmaLc);
         for (const s of sentences) {
           // Wortgrenzen-Regex: Suche nach Wörtern, die mit dem Stamm beginnen
-          // (erlaubt Beugung: muralla, murallas, murallas; aber nicht mur en muralla)
+          // (erlaubt Beugung: muralla, murallas; aber nicht mur en muralla)
           const wordRe = new RegExp(
-            "\\b(" + escapeRegex(isShort ? lemmaLc : stem) + "[a-záéíóúñü]*)\\b",
+            "\\b(" + escapeRegex(stem) + "[a-záéíóúñü]*)\\b",
             "i"
           );
           const m = s.match(wordRe);
@@ -1427,9 +1437,8 @@
         const sentences = sentenceMap[chunkId];
         if (!sentences || !sentences.length) return null;
         const lemmaLc = lemma.toLowerCase();
-        const stem = lemmaLc.length >= 5 ? lemmaLc.slice(0, Math.max(4, lemmaLc.length - 2)) : lemmaLc;
-        const isShort = lemmaLc.length <= 3;
-        const re = new RegExp("\\b(" + escapeRegex(isShort ? lemmaLc : stem) + "[a-záéíóúñü]*)\\b", "i");
+        const stem = lemmaStem(lemmaLc);
+        const re = new RegExp("\\b(" + escapeRegex(stem) + "[a-záéíóúñü]*)\\b", "i");
         for (const s of sentences) {
           if (s.es && re.test(s.es)) return s;
         }
@@ -1458,15 +1467,18 @@
       }
       function extractLemma(html, lang) {
         // „of <Wort>"-Pattern. Wort-Zeichenklasse hängt von der Sprache ab.
+        // Negative Lookahead: ignoriert Artikel (of a/the/an …), die fälschlich
+        // als Lemma matched haben (z. B. „handrail … of a staircase" → „a").
         if (lang === "de") {
-          const m = html.match(/of\s+([A-Za-zÄÖÜäöüß]+)/);
+          const m = html.match(/of\s+(?![Tt]he\b|[Aa]n?\b)([A-Za-zÄÖÜäöüß]+)/);
           return m ? m[1] : null;
         }
         if (lang === "es") {
-          const m = html.match(/of\s+([A-Za-zÁÉÍÓÚÜáéíóúüÑñ]+)/);
+          const m = html.match(/of\s+(?![Tt]he\b|[Aa]n?\b)([A-Za-zÁÉÍÓÚÜáéíóúüÑñ]+)/);
           return m ? m[1] : null;
         }
-        const m = html.match(/of\s+([А-Яа-яЁё][А-Яа-яЁё]*(?:́[А-Яа-яЁё]+)?)/);
+        // Russisch: Artikel gibt es nicht, Lookahead nur aus Konsistenz.
+        const m = html.match(/of\s+(?![Tt]he\b|[Aa]n?\b)([А-Яа-яЁё][А-Яа-яЁё]*(?:́[А-Яа-яЁё]+)?)/);
         return m ? m[1] : null;
       }
       function stripAccents(w) { return w.replace(/\u0301/g, ""); }
