@@ -168,24 +168,24 @@
     .dict-popup {
       position: fixed; z-index: 100;
       background: var(--card-2); border: 1px solid var(--accent);
-      border-radius: 12px; padding: 1rem 1.2rem; max-width: 380px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); font-size: 1rem; display: none;
+      border-radius: 12px; padding: 1.3rem 1.6rem; max-width: 494px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); font-size: 1.3rem; display: none;
     }
     .dict-popup.visible { display: block; }
     .dict-popup .dw { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.3rem; }
-    .dict-popup .lemma { font-size: 1.15rem; font-weight: 700; color: var(--accent); }
-    .dict-popup .inflected { color: var(--muted); font-size: 0.8rem; }
+    .dict-popup .lemma { font-size: 1.5rem; font-weight: 700; color: var(--accent); }
+    .dict-popup .inflected { color: var(--muted); font-size: 1rem; }
     .dict-popup .rank-badge {
-      color: var(--muted-2); font-size: 0.7rem; font-weight: 600;
-      background: var(--card); border: 1px solid var(--border);
-      padding: 0.1rem 0.4rem; border-radius: 6px; white-space: nowrap;
+      color: var(--ok); font-size: 0.85rem; font-weight: 600;
+      background: rgba(46,204,113,0.12); border: 1px solid var(--ok);
+      padding: 0.15rem 0.5rem; border-radius: 6px; white-space: nowrap;
       margin-left: 0.3rem;
     }
     .dict-popup .rank-badge.film-badge {
-      color: var(--accent); border-color: var(--accent);
-      background: var(--accent-soft);
+      color: var(--ok); border-color: var(--ok);
+      background: rgba(46,204,113,0.12);
     }
-    .dict-popup .pos { color: var(--muted-2); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; }
+    .dict-popup .pos { color: var(--muted-2); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem; }
     .dict-popup .gloss { color: var(--text); line-height: 1.45; }
     .dict-popup .loading, .dict-popup .err { color: var(--muted); }
     .dict-popup .close-hint { color: var(--muted-2); font-size: 0.7rem; margin-top: 0.5rem; }
@@ -483,7 +483,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.4";
+      const VERSION = "7.5";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
