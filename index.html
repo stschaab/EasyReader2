@@ -486,7 +486,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.9";
+      const VERSION = "7.10";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1276,10 +1276,17 @@
       synOverlay.addEventListener("click", function (e) {
         if (e.target === synOverlay || e.target.classList.contains("syn-close")) hideSynPopup();
       });
-      // Rang-Badge-HTML: "Rang 1234 · B2" oder "Rang unbekannt"
-      function synRankBadge(rank, cefr) {
-        if (rank == null) return '<span class="rank">Rang unbekannt</span>';
-        return '<span class="rank">Rang ' + rank + (cefr ? ' · ' + cefr : '') + '</span>';
+      // Rang-Badges für Synonym-Popup: gleiche Logik wie Wörterbuch-Popup
+      // (Lemma-Rang + Form-Rang, Format "rang/total", "-" wenn nicht in Liste).
+      // Erwartet ein Wort (Lemma für Lemma-Rang, surface-Form für Form-Rang).
+      function synRankBadges(lemmaWord, formWord) {
+        const rc = rankFileConf();
+        if (!rc) return '';
+        const fmt = n => (n == null ? "-" : n.toLocaleString("de-DE"));
+        const lr = rankForLemma(lemmaWord);
+        const fr = rankForForm(formWord);
+        return '<span class="rank-badge">OpenSubtitles Rang (Lemma): ' + fmt(lr) + '/' + fmt(rc.lemmaTotal) + '</span>' +
+               '<span class="rank-badge film-badge">OpenSubtitles Rang (Form): ' + fmt(fr) + '/' + fmt(rc.formTotal) + '</span>';
       }
       function fetchSynonym(lemma) {
         // Sofort Spinner zeigen
@@ -1300,40 +1307,35 @@
           .then(function (res) { return res.json(); })
           .then(function (data) {
             if (data.error) throw new Error(data.error);
-            // Originalrang clientseitig ergänzen, falls der Worker ihn nicht liefert
-            // (für 'es' steht keine words-Tabelle in D1 → Rang aus es_ranks.json).
-            if (data.orig_rank == null) {
-              return ensureRankMap().then(function () {
-                const r = rankForLemma(lemma);
-                if (r != null) data.orig_rank = r;
-                return data;
-              });
-            }
-            return data;
+            // Ränge clientseitig laden (Lemma- + Form-Map), damit beide Wörter
+            // dieselbe Rang-Anzeige wie im Wörterbuch-Popup bekommen.
+            return Promise.all([ensureRankMap(), ensureFormRankMap()]).then(function () {
+              return data;
+            });
           })
           .then(function (data) {
             const syn = (data.synonym || "").trim();
             let body;
             if (!syn) {
               // Kein passendes Synonym gefunden
-              const origInfo = data.orig_rank != null
-                ? ' (Original: Rang ' + data.orig_rank + (data.orig_cefr ? ' · ' + data.orig_cefr : '') + ')'
-                : '';
               body =
                 '<div class="syn-word">' + escapeHtml(lemma) + '</div>' +
-                '<div class="syn-empty">Kein einfacheres Synonym gefunden, das die Bedeutung erhält.' + origInfo + '</div>';
+                '<div class="syn-meta">' + synRankBadges(lemma, lemma) + '</div>' +
+                '<div class="syn-empty">Kein einfacheres Synonym gefunden, das die Bedeutung erhält.</div>';
             } else {
-              const easier = (data.syn_rank != null && data.orig_rank != null && data.syn_rank < data.orig_rank);
+              const origLr = rankForLemma(lemma);
+              const synLr = rankForLemma(syn);
+              const easier = (origLr != null && synLr != null && synLr < origLr);
               body =
                 '<div class="syn-word">' + escapeHtml(lemma) + '</div>' +
+                '<div class="syn-meta">' + synRankBadges(lemma, lemma) + '</div>' +
                 '<div class="syn-arrow">↓ einfacheres Synonym</div>' +
                 '<div class="syn-word">' + escapeHtml(syn) + '</div>' +
                 (data.en_syn ? '<div class="syn-gloss">' + escapeHtml(data.en_syn) + '</div>' : '') +
                 '<div class="syn-meta">' +
                   (data.semantic_pct != null ? '<span class="badge">' + data.semantic_pct + '% Bedeutung</span>' : '') +
                   (easier ? '<span class="badge">✓ häufiger</span>' : '') +
-                  synRankBadge(data.orig_rank, data.orig_cefr) +
-                  (data.syn_rank != null ? '<span class="rank">→ Rang ' + data.syn_rank + (data.syn_cefr ? ' · ' + data.syn_cefr : '') + '</span>' : '') +
+                  synRankBadges(syn, syn) +
                 '</div>' +
                 (data.note ? '<div class="syn-note">' + escapeHtml(data.note) + '</div>' : '');
             }
