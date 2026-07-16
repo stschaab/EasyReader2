@@ -486,7 +486,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.6";
+      const VERSION = "7.7";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1578,12 +1578,12 @@
           if (entry.inflected) html += '<span class="inflected">(von „' + entry.inflected + '")</span>';
           // Rang-Badges (nur spanische Bücher haben Frequenzlisten).
           // Format "Label: rang / total" mit 1000er-Punkt; "-" wenn nicht in Liste.
-          // Beide Badges stammen aus es_50k.txt (OpenSubtitles) — einmal über
-          // spaCy lemmatisiert (Lemma), einmal als rohe Beugung (Form).
+          // Beide Badges aus Top-100k von es_full.txt (OpenSubtitles 2018) — einmal
+          // über spaCy-lg lemmatisiert (Lemma), einmal als rohe Beugung (Form).
           if (wiktLang() === "es") {
             const fmt = n => (n == null ? "-" : n.toLocaleString("de-DE"));
-            html += '<span class="rank-badge">OpenSubtitles Rang (Lemma): ' + fmt(entry.rank) + '/35.100</span>';
-            html += '<span class="rank-badge film-badge">OpenSubtitles Rang (Form): ' + fmt(entry.filmRank) + '/50.000</span>';
+            html += '<span class="rank-badge">OpenSubtitles Rang (Lemma): ' + fmt(entry.rank) + '/67.778</span>';
+            html += '<span class="rank-badge film-badge">OpenSubtitles Rang (Form): ' + fmt(entry.filmRank) + '/100.000</span>';
           }
           html += '</div>';
           if (entry.pos) html += '<div class="pos">' + entry.pos + '</div>';

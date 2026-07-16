@@ -19,9 +19,11 @@ import json
 import spacy
 
 print("Lade spaCy-Modell...", flush=True)
-nlp = spacy.load("es_core_news_sm", disable=["parser", "ner"])
+# lg statt sm/md: beste Lemmatisierung, auch fuer seltene Woerter.
+# sm lemmatisierte losa->lós, mariposa->maripós (falsch); lg macht es richtig.
+nlp = spacy.load("es_core_news_lg", disable=["parser", "ner"])
 
-SRC = "scripts/freqlists/es_50k.txt"
+SRC = "scripts/freqlists/es_full.txt"
 OUT = "scripts/freqlists/es_lemmas.json"
 
 # 1. Rohe Liste einlesen
@@ -38,9 +40,9 @@ with open(SRC, encoding="utf-8") as f:
 print(f"  {len(entries)} Formen, Gesamt-Count: {total:,}", flush=True)
 
 # 2. Lemmatisieren: batching für Geschwindigkeit
-#    Wir nehmen alle 50000 Formen der es_50k.txt (vorher künstlich auf 20000
-#    gedeckelt, was systematisch Wörter ab Rang 20000 wie z.B. "losa" fehlen ließ).
-LIMIT = 50000
+#    Top 100000 aus der vollen es_full.txt (1,2 Mio Formen). Erweitert von 50k,
+#    damit Plurale und seltenere Beugungen (z.B. losas) Coverage bekommen.
+LIMIT = 100000
 forms = [e[0] for e in entries[:LIMIT]]
 counts = [e[1] for e in entries[:LIMIT]]
 print(f"Lemmatisiere oberste {len(forms)} Formen...", flush=True)
