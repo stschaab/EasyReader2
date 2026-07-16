@@ -257,6 +257,16 @@
       font-size: 1.15rem; color: var(--text); line-height: 1.5; margin-top: 1.2rem;
       padding: 1rem; background: var(--card); border: 1px solid var(--border); border-radius: 10px;
     }
+    .review-card .vocab-en-gloss {
+      font-size: 1.1rem; color: var(--text); line-height: 1.5; margin-top: 0.6rem;
+      padding: 0.8rem 1rem; background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    }
+    .review-card .vocab-en-gloss .vocab-en-label {
+      display: inline-block; font-size: 0.68rem; font-weight: 700; color: var(--accent);
+      background: var(--accent-soft); padding: 0.1rem 0.35rem; border-radius: 4px;
+      margin-right: 0.4rem; vertical-align: middle; text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .review-card .vocab-rank { margin-top: 0.5rem; }
     .review-card .vocab-en-sentence {
       font-size: 1rem; color: var(--muted); line-height: 1.45; margin-top: 0.6rem;
       padding: 0.8rem 1rem; background: var(--card-2); border-left: 3px solid var(--accent);
@@ -486,7 +496,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.10";
+      const VERSION = "7.11";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -948,6 +958,18 @@
           sentenceHtml = '<div class="vocab-lemma">' + escapeHtml(c.lemma) + '</div>';
         }
 
+        // Lemma-Rang (nur Lemma, keine Form — in der Lernliste steht die Grundform).
+        // Lazy-Map laden, dann rendern. Bei erster Anzeige evtl. noch nicht geladen →
+        // nach ensureRankMap() nochmal setzen.
+        const rc = (c.lang && RANK_FILES[c.lang]) ? RANK_FILES[c.lang] : null;
+        function lemmaBadgeHtml() {
+          if (!rc) return '';
+          const fmt = n => (n == null ? "-" : n.toLocaleString("de-DE"));
+          // Lookup-Pfad DE: case-sensitiv, ES: lowercase — rankForLemma regelt das.
+          const r = rankForLemma(c.lemma);
+          return '<div class="vocab-rank"><span class="rank-badge">OpenSubtitles Rang (Lemma): ' + fmt(r) + '/' + fmt(rc.lemmaTotal) + '</span></div>';
+        }
+
         reviewCard.innerHTML =
           '<h2>🎓 Karte <span class="counter" style="float:right;font-size:0.85rem">' + (posInDeck + 1) + ' / ' + total + '</span></h2>' +
           '<div class="nav-buttons" style="margin-top:0.5rem">' +
@@ -956,8 +978,9 @@
           '</div>' +
           sentenceHtml +
           (c.pos ? '<div class="vocab-pos" style="margin-top:0.5rem">' + escapeHtml(c.pos) + '</div>' : '') +
+          (c.gloss ? '<div class="vocab-en-gloss"><span class="vocab-en-label">EN</span> ' + escapeHtml(c.gloss) + '</div>' : '') +
           (c.sentence_en ? '<div class="vocab-en-sentence">' + escapeHtml(c.sentence_en) + '</div>' : '') +
-          (c.gloss ? '<div class="vocab-gloss">' + escapeHtml(c.gloss) + '</div>' : '') +
+          (rc ? lemmaBadgeHtml() : '') +
           '<div class="detail-stats">' +
             '<span>×' + (c.reps || 0) + ' geübt</span>' +
             '<span>' + dueText + '</span>' +
@@ -969,6 +992,15 @@
             (c.lang === "es" ? '<button class="grade-btn" id="detail-syn-btn" title="Synonym live per GLM">🔁 Synonym</button>' : '') +
           '</div>' +
           '<button class="close-review" id="detail-back-btn">← Zurück zur Liste</button>';
+
+        // Falls die Lemma-Map noch laedt (erster Oeffnen der Lernliste): nachladen
+        // und Badge nachtraeglich befuellen.
+        if (rc && !rankMap) {
+          ensureRankMap().then(function () {
+            const badgeDiv = reviewCard.querySelector('.vocab-rank');
+            if (badgeDiv) badgeDiv.innerHTML = lemmaBadgeHtml().replace(/<div class="vocab-rank">|<\/div>$/g, '');
+          });
+        }
 
         document.getElementById("detail-del-btn").addEventListener("click", function () {
           if (confirm("„" + c.lemma + "\" aus dem Deck löschen?")) {
