@@ -1578,10 +1578,12 @@
           if (entry.inflected) html += '<span class="inflected">(von „' + entry.inflected + '")</span>';
           // Rang-Badges (nur spanische Bücher haben Frequenzlisten).
           // Format "Label: rang / total" mit 1000er-Punkt; "-" wenn nicht in Liste.
+          // Beide Badges stammen aus es_50k.txt (OpenSubtitles) — einmal über
+          // spaCy lemmatisiert (Lemma), einmal als rohe Beugung (Form).
           if (wiktLang() === "es") {
             const fmt = n => (n == null ? "-" : n.toLocaleString("de-DE"));
-            html += '<span class="rank-badge">Kelly Rang: ' + fmt(entry.rank) + '/8.535</span>';
-            html += '<span class="rank-badge film-badge">OpenSubtitles Rang: ' + fmt(entry.filmRank) + '/50.000</span>';
+            html += '<span class="rank-badge">OpenSubtitles Rang (Lemma): ' + fmt(entry.rank) + '/35.100</span>';
+            html += '<span class="rank-badge film-badge">OpenSubtitles Rang (Form): ' + fmt(entry.filmRank) + '/50.000</span>';
           }
           html += '</div>';
           if (entry.pos) html += '<div class="pos">' + entry.pos + '</div>';
