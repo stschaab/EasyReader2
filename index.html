@@ -496,7 +496,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.11";
+      const VERSION = "7.12";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -962,12 +962,18 @@
         // Lazy-Map laden, dann rendern. Bei erster Anzeige evtl. noch nicht geladen →
         // nach ensureRankMap() nochmal setzen.
         const rc = (c.lang && RANK_FILES[c.lang]) ? RANK_FILES[c.lang] : null;
+        function lemmaRankFor(lemma) {
+          // Sprachspezifischer Lookup unabhaengig vom Buch-Kontext (wiktLang).
+          // DE: case-sensitiv + lowercase-Fallback. ES/andere: lowercase.
+          if (!rankMap || !lemma) return null;
+          if (c.lang === "de") return rankMap[lemma] || rankMap[lemma.toLowerCase()] || null;
+          return rankMap[lemma.toLowerCase()] || null;
+        }
         function lemmaBadgeHtml() {
           if (!rc) return '';
           const fmt = n => (n == null ? "-" : n.toLocaleString("de-DE"));
-          // Lookup-Pfad DE: case-sensitiv, ES: lowercase — rankForLemma regelt das.
-          const r = rankForLemma(c.lemma);
-          return '<div class="vocab-rank"><span class="rank-badge">OpenSubtitles Rang (Lemma): ' + fmt(r) + '/' + fmt(rc.lemmaTotal) + '</span></div>';
+          const r = lemmaRankFor(c.lemma);
+          return '<span class="rank-badge">OpenSubtitles Rang (Lemma): ' + fmt(r) + '/' + fmt(rc.lemmaTotal) + '</span>';
         }
 
         reviewCard.innerHTML =
@@ -980,7 +986,7 @@
           (c.pos ? '<div class="vocab-pos" style="margin-top:0.5rem">' + escapeHtml(c.pos) + '</div>' : '') +
           (c.gloss ? '<div class="vocab-en-gloss"><span class="vocab-en-label">EN</span> ' + escapeHtml(c.gloss) + '</div>' : '') +
           (c.sentence_en ? '<div class="vocab-en-sentence">' + escapeHtml(c.sentence_en) + '</div>' : '') +
-          (rc ? lemmaBadgeHtml() : '') +
+          (rc ? '<div class="vocab-rank">' + lemmaBadgeHtml() + '</div>' : '') +
           '<div class="detail-stats">' +
             '<span>×' + (c.reps || 0) + ' geübt</span>' +
             '<span>' + dueText + '</span>' +
@@ -994,11 +1000,12 @@
           '<button class="close-review" id="detail-back-btn">← Zurück zur Liste</button>';
 
         // Falls die Lemma-Map noch laedt (erster Oeffnen der Lernliste): nachladen
-        // und Badge nachtraeglich befuellen.
-        if (rc && !rankMap) {
-          ensureRankMap().then(function () {
+        // und Badge nachtraeglich befuellen. Karte kann andere Sprache haben als
+        // das aktuell offene Buch → Map c.lang-spezifisch laden.
+        if (rc && (!rankMap || !rankMapLoadedFor || rankMapLoadedFor !== c.lang)) {
+          loadRankMapFor(c.lang).then(function () {
             const badgeDiv = reviewCard.querySelector('.vocab-rank');
-            if (badgeDiv) badgeDiv.innerHTML = lemmaBadgeHtml().replace(/<div class="vocab-rank">|<\/div>$/g, '');
+            if (badgeDiv) badgeDiv.innerHTML = lemmaBadgeHtml();
           });
         }
 
@@ -1433,15 +1440,28 @@
         if (!conf) return rankMap || {};
         rankMapLoading = fetch(conf.lemma + "?v=" + VERSION)
           .then(r => r.ok ? r.json() : {})
-          .then(j => { rankMap = j; return j; })
+          .then(j => { rankMap = j; rankMapLoadedFor = wiktLang(); return j; })
           .catch(() => { rankMap = {}; return {}; });
         return rankMapLoading;
+      }
+      // Map explizit fuer eine Sprache laden (fuer Lernliste, wo c.lang das
+      // offene Buch uebersteuert). Setzt rankMap + rankMapLoadedFor neu.
+      let rankMapLoadedFor = null;
+      async function loadRankMapFor(lang) {
+        const conf = lang ? RANK_FILES[lang] : null;
+        if (!conf) return rankMap || {};
+        if (rankMap && rankMapLoadedFor === lang) return rankMap;
+        rankMap = await fetch(conf.lemma + "?v=" + VERSION)
+          .then(r => r.ok ? r.json() : {})
+          .catch(() => { return {}; });
+        rankMapLoadedFor = lang;
+        return rankMap;
       }
       function rankForLemma(lemma) {
         if (!rankMap || !lemma) return null;
         // Deutsch: case-sensitiv (Bruder != bruder), dann lowercase-Fallback.
         // Spanisch etc.: lowercase (Grossschreibung dort nicht grammatikalisch).
-        if (wiktLang() === "de") {
+        if (rankMapLoadedFor === "de" || (!rankMapLoadedFor && wiktLang() === "de")) {
           return rankMap[lemma] || rankMap[lemma.toLowerCase()] || null;
         }
         return rankMap[lemma.toLowerCase()] || null;
