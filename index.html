@@ -496,7 +496,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.13";
+      const VERSION = "7.14";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1463,6 +1463,7 @@
       const RANK_FILES = {
         es: { lemma: "es_ranks.json", form: "es_form_ranks.json", lemmaTotal: 67778, formTotal: 100000 },
         de: { lemma: "de_ranks.json", form: "de_form_ranks.json", lemmaTotal: 78894, formTotal: 100000 },
+        ru: { lemma: "ru_ranks.json", form: "ru_form_ranks.json", lemmaTotal: 21768, formTotal: 50000 },
       };
       let rankMap = null;
       let rankMapLoading = null;
