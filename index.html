@@ -486,7 +486,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.7";
+      const VERSION = "7.8";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1382,13 +1382,22 @@
 
       // Wort-Übersetzung (gleiche Logik wie SimpleReader)
       const dictCache = {};
-      // Frequenzränge (lazy geladen, nur Lemma→rank Map, spanisch)
+      // Frequenzränge (lazy geladen, sprachbewusst). Pro Sprache eine Lemma-Map
+      // und eine Form-Map, beide aus OpenSubtitles (Top-100k), via spaCy-lg
+      // lemmatisiert bzw. roh. Totale pro Sprache fest (Listen aendern sich nicht).
+      const RANK_FILES = {
+        es: { lemma: "es_ranks.json", form: "es_form_ranks.json", lemmaTotal: 67778, formTotal: 100000 },
+        de: { lemma: "de_ranks.json", form: "de_form_ranks.json", lemmaTotal: 77734, formTotal: 100000 },
+      };
       let rankMap = null;
       let rankMapLoading = null;
+      function rankFileConf() { return RANK_FILES[wiktLang()] || null; }
       async function ensureRankMap() {
         if (rankMap) return rankMap;
         if (rankMapLoading) return rankMapLoading;
-        rankMapLoading = fetch("es_ranks.json?v=" + VERSION)
+        const conf = rankFileConf();
+        if (!conf) return rankMap || {};
+        rankMapLoading = fetch(conf.lemma + "?v=" + VERSION)
           .then(r => r.ok ? r.json() : {})
           .then(j => { rankMap = j; return j; })
           .catch(() => { rankMap = {}; return {}; });
@@ -1398,14 +1407,16 @@
         if (!rankMap || !lemma) return null;
         return rankMap[lemma.toLowerCase()] || null;
       }
-      // Form-Rang (gebeugte Form, OpenSubtitles, spanisch). Komplementär zum
-      // Lemma-Rang: spiegelt Häufigkeit der KONKRETEN Beugung, nicht des Lemmas.
+      // Form-Rang (gebeugte Form, OpenSubtitles). Komplementaer zum Lemma-Rang:
+      // spiegelt Haeufigkeit der KONKRETEN Beugung, nicht des Lemmas.
       let formRankMap = null;
       let formRankMapLoading = null;
       async function ensureFormRankMap() {
         if (formRankMap) return formRankMap;
         if (formRankMapLoading) return formRankMapLoading;
-        formRankMapLoading = fetch("es_form_ranks.json?v=" + VERSION)
+        const conf = rankFileConf();
+        if (!conf) return formRankMap || {};
+        formRankMapLoading = fetch(conf.form + "?v=" + VERSION)
           .then(r => r.ok ? r.json() : {})
           .then(j => { formRankMap = j; return j; })
           .catch(() => { formRankMap = {}; return {}; });
@@ -1489,8 +1500,8 @@
         if (!word || word.length < 2) return;
         showPopup('<div class="loading">Suche „' + word + '"…</div>', x, y);
         // Frequenzränge lazy laden (parallel, blockiert den LookUp nicht).
-        // Nur relevant für spanische Bücher — andere Sprachen haben wir nicht.
-        if (lang === "es") { ensureRankMap(); ensureFormRankMap(); }
+        // Nur für Sprachen mit Frequenzliste (es, de); sonst kein-op.
+        if (rankFileConf()) { ensureRankMap(); ensureFormRankMap(); }
         // Cache: sowohl Originalform als auch lowercase-Variante prüfen.
         // (Wörter am Satzanfang sind großgeschrieben, Wiktionary hat Lemmata aber klein.)
         if (dictCache[word]) { renderDict(word, dictCache[word], x, y); return; }
@@ -1512,18 +1523,18 @@
         if (entry.lemma && rankMap) {
           const r = rankForLemma(entry.lemma);
           if (r != null) entry.rank = r;
-        } else if (entry.lemma && lang === "es") {
+        } else if (entry.lemma && rankFileConf()) {
           // Map lädt noch (erster Klick) — kurz warten, sonst würde fälschlich
           // "-" angezeigt obwohl das Wort in der Liste ist.
           await ensureRankMap();
           const r = rankForLemma(entry.lemma);
           if (r != null) entry.rank = r;
         }
-        // Form-Rang dazuschreiben (gebeugte Form, OpenSubtitles, spanisch).
+        // Form-Rang dazuschreiben (gebeugte Form, OpenSubtitles).
         if (formRankMap) {
           const fr = rankForForm(word);
           if (fr != null) entry.filmRank = fr;
-        } else if (lang === "es") {
+        } else if (rankFileConf()) {
           // Map lädt noch (erster Klick) — kurz warten, sonst würde fälschlich
           // "-" angezeigt obwohl das Wort in der Liste ist.
           await ensureFormRankMap();
@@ -1576,14 +1587,15 @@
         else {
           html = '<div class="dw"><span class="lemma">' + entry.lemma + '</span>';
           if (entry.inflected) html += '<span class="inflected">(von „' + entry.inflected + '")</span>';
-          // Rang-Badges (nur spanische Bücher haben Frequenzlisten).
+          // Rang-Badges (nur für Sprachen mit Frequenzliste: es, de).
           // Format "Label: rang / total" mit 1000er-Punkt; "-" wenn nicht in Liste.
-          // Beide Badges aus Top-100k von es_full.txt (OpenSubtitles 2018) — einmal
-          // über spaCy-lg lemmatisiert (Lemma), einmal als rohe Beugung (Form).
-          if (wiktLang() === "es") {
+          // Beide Badges aus Top-100k OpenSubtitles 2018 — einmal über spaCy-lg
+          // lemmatisiert (Lemma), einmal als rohe Beugung (Form). Totale aus RANK_FILES.
+          const rc = rankFileConf();
+          if (rc) {
             const fmt = n => (n == null ? "-" : n.toLocaleString("de-DE"));
-            html += '<span class="rank-badge">OpenSubtitles Rang (Lemma): ' + fmt(entry.rank) + '/67.778</span>';
-            html += '<span class="rank-badge film-badge">OpenSubtitles Rang (Form): ' + fmt(entry.filmRank) + '/100.000</span>';
+            html += '<span class="rank-badge">OpenSubtitles Rang (Lemma): ' + fmt(entry.rank) + '/' + fmt(rc.lemmaTotal) + '</span>';
+            html += '<span class="rank-badge film-badge">OpenSubtitles Rang (Form): ' + fmt(entry.filmRank) + '/' + fmt(rc.formTotal) + '</span>';
           }
           html += '</div>';
           if (entry.pos) html += '<div class="pos">' + entry.pos + '</div>';
