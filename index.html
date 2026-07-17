@@ -2141,8 +2141,12 @@
       function startBugRecognition() {
         if (!SpeechRecognitionCtor) return;
         const rec = new SpeechRecognitionCtor();
-        // Sprache: TTS-Sprache des Buchs, sonst Deutsch (UI-Sprache des Nutzers)
-        rec.lang = (book && book.tts_lang) ? book.tts_lang : "de-DE";
+        // Sprache: UI-Sprache des Nutzers (nicht Buch-Sprache!). Eine
+        // Bug-Beschreibung schreibt man in der Bedien-Sprache, nicht in der
+        // Sprache des gerade geleseenen Textes — sonst wird z.B. deutsches
+        // Diktat bei einem russischen Buch als russisch interpretiert → Gibberish.
+        // navigator.language = Browsersprache (z.B. "de", "de-DE", "en-US").
+        rec.lang = (navigator.language || "de-DE");
         rec.interimResults = true;
         rec.continuous = true;
         let baseText = bugDesc.value;
