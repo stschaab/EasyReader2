@@ -633,7 +633,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.20";
+      const VERSION = "7.21";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -2100,6 +2100,9 @@
       // Screenshot als data-url, skaliert auf max 1280px Breite, JPEG 0.7.
       // html2canvas fehlt gelegentlich (CDN geblockt) oder hängt bei
       // CORS-Bild-Anfragen -> Timeout nach 8s, dann null (ohne Screenshot fortfahren).
+      // Wichtig: das Bug-Overlay selbst darf NICHT auf dem Screenshot stehen.
+      // Da das Overlay schon geöffnet ist (für sofortiges Feedback), verstecken
+      // wir es im geklonten DOM via onclone — der echte DOM bleibt sichtbar.
       async function captureScreenshot() {
         if (typeof html2canvas !== "function") return null;
         try {
@@ -2111,6 +2114,12 @@
               useCORS: true,
               logging: false,
               backgroundColor: getComputedStyle(document.body).backgroundColor || "#0f1115",
+              onclone: function (doc) {
+                // Bug-Overlay im Klon verbergen, damit es nicht auf dem
+                // Screenshot landet (echter DOM bleibt davon unberührt).
+                const ov = doc.getElementById("bug-overlay");
+                if (ov) ov.style.display = "none";
+              },
             }),
             new Promise(function (_, reject) {
               setTimeout(function () { reject(new Error("screenshot-timeout")); }, SHOT_TIMEOUT_MS);
