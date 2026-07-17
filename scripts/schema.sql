@@ -161,3 +161,20 @@ CREATE TABLE IF NOT EXISTS user_words (
   FOREIGN KEY (user_id) REFERENCES users(id),
   FOREIGN KEY (word_id) REFERENCES words(id)
 );
+
+-- ═══════════════════════════════════════════════════════════════
+-- BUG-REPORTS (User-Feedback aus dem Frontend)
+-- ═══════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS bug_reports (
+  id INTEGER PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  version TEXT,                       -- Frontend-Version zum Zeitpunkt des Reports
+  book_id INTEGER,                    -- aktuelles Buch (optional)
+  chunk_index INTEGER,                -- aktueller Absatz (optional)
+  level TEXT,                         -- aktuelles Level (optional)
+  description TEXT,                   -- Freitext-Beschreibung (optional)
+  screenshot TEXT,                    -- base64-Data-URL (kann NULL sein, wenn zu groß)
+  user_agent TEXT,                    -- Browser/OS aus Request-Header
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_bug_reports_created ON bug_reports(created_at DESC);

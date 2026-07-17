@@ -6,6 +6,10 @@
 //   POST /api/simplify            – RAG-Vereinfachung { chunk_id, level }
 //   POST /api/progress            – Lesefortschritt speichern
 //   GET  /api/progress/:bookId    – Lesefortschritt laden
+//   POST /api/bug-report          – Bug-Report mit optionalem Screenshot speichern
+//   POST /api/synonym             – Synonym+Rang+EN für ein spanisches Wort (GLM, live)
+//   GET  /api/admin/bug-reports   – Bug-Report-Liste (X-Admin-Key geschützt)
+//   GET  /api/admin/bug-reports/:id – Einzelner Bug-Report mit Screenshot
 //   POST /api/admin/words         – Kelly-Wortlisten-Import (X-Admin-Key geschützt)
 
 const CORS = {
@@ -468,6 +472,92 @@ export default {
         return json({ error: "unbekannte action" }, 400);
       }
 
+      // ─── Bug-Report speichern (öffentlich, mit Screenshot) ───
+      // Frontend schickt { description, screenshot (data-url), version, book_id, chunk_index, level }.
+      // Screenshot wird verworfen, wenn er zu groß für D1 ist (~750 KB base64-Grenze).
+      if (path === "/api/bug-report" && request.method === "POST") {
+        const body = await request.json();
+        const description = (body.description || "").toString().slice(0, 4000);
+        const version = body.version ? String(body.version).slice(0, 32) : null;
+        const bookId = body.book_id ? parseInt(body.book_id, 10) : null;
+        const chunkIndex = Number.isInteger(body.chunk_index) ? body.chunk_index : null;
+        const lvl = body.level ? String(body.level).slice(0, 16) : null;
+        const userAgent = (request.headers.get("User-Agent") || "").slice(0, 512);
+
+        // Screenshot-Größenlimit: base64-String, max ~750 KB (D1-Zeilen-Limit sicher)
+        const MAX_SHOT = 750000;
+        let screenshot = null;
+        let screenshotDropped = false;
+        if (typeof body.screenshot === "string" && body.screenshot.length > 0) {
+          if (body.screenshot.length <= MAX_SHOT) {
+            screenshot = body.screenshot;
+          } else {
+            screenshotDropped = true;
+          }
+        }
+
+        // Tabelle bei Bedarf anlegen (wie bei word_forms, Idempotent)
+        await env.DB.prepare(
+          `CREATE TABLE IF NOT EXISTS bug_reports (
+            id INTEGER PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            version TEXT,
+            book_id INTEGER,
+            chunk_index INTEGER,
+            level TEXT,
+            description TEXT,
+            screenshot TEXT,
+            user_agent TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+          )`
+        ).run();
+        await env.DB.prepare(
+          `CREATE INDEX IF NOT EXISTS idx_bug_reports_created ON bug_reports(created_at DESC)`
+        ).run();
+
+        // User anlegen falls noch nicht vorhanden (analog /api/progress)
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO users (id, type) VALUES (?, 'anon')`
+        ).bind(userId).run();
+
+        const result = await env.DB.prepare(
+          `INSERT INTO bug_reports (user_id, version, book_id, chunk_index, level, description, screenshot, user_agent)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(userId, version, bookId, chunkIndex, lvl, description || null, screenshot, userAgent).run();
+
+        return json({
+          ok: true,
+          id: result.meta?.last_row_id || null,
+          screenshot_dropped: screenshotDropped,
+        });
+      }
+
+      // ─── Admin: Bug-Report-Liste (letzte 50, ohne Screenshots) ───
+      if (path === "/api/admin/bug-reports" && request.method === "GET") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const r = await env.DB.prepare(
+          `SELECT id, user_id, version, book_id, chunk_index, level, description, user_agent, created_at,
+                  (screenshot IS NOT NULL) AS has_screenshot
+           FROM bug_reports ORDER BY created_at DESC LIMIT 50`
+        ).all();
+        return json({ reports: r.results });
+      }
+
+      // ─── Admin: Einzelner Bug-Report mit Screenshot ───
+      const bugMatch = path.match(/^\/api\/admin\/bug-reports\/(\d+)$/);
+      if (bugMatch && request.method === "GET") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const reportId = parseInt(bugMatch[1], 10);
+        const row = await env.DB.prepare(
+          `SELECT id, user_id, version, book_id, chunk_index, level, description, screenshot, user_agent, created_at
+           FROM bug_reports WHERE id = ?`
+        ).bind(reportId).first();
+        if (!row) return json({ error: "nicht gefunden" }, 404);
+        return json({ report: row });
+      }
+
       // ─── Lesefortschritt speichern ───
       if (path === "/api/progress" && request.method === "POST") {
         const { book_id, chunk_index, level } = await request.json();
@@ -493,6 +583,163 @@ export default {
           `SELECT chunk_index, level FROM progress WHERE user_id = ? AND book_id = ?`
         ).bind(userId, bookId).first();
         return json({ progress: p || { chunk_index: 0, level: "original" } });
+      }
+
+      // ─── Synonym für ein Wort (live GLM, ohne Cache) ───────────────
+      // Liefert: ein semantisch ähnliches, aber häufigeres (Kelly-Rang niedriger)
+      // Synonym + englische Glossen + semantische Übereinstimmung in %.
+      // Zweck: didaktische Hilfe UND Live-Test der Kette WebApp→Worker→GLM.
+      if (path === "/api/synonym" && request.method === "POST") {
+        const { lemma, lang } = await request.json();
+        if (!lemma) return json({ error: "lemma erforderlich" }, 400);
+        const langCode = lang || "es";
+
+        // 1. language_id für den Sprach-Code ('ru' liegt in D1; 'es' z.B. nicht).
+        //    Ist die Sprache nicht in D1, fahren wir ohne serverseitige Ränge fort
+        //    (für 'es' liefert das Frontend den Rang clientseitig via es_ranks.json).
+        const langRow = await env.DB.prepare(
+          `SELECT id FROM languages WHERE code = ?`
+        ).bind(langCode).first();
+        const languageId = langRow ? langRow.id : null;
+
+        // 2. Original-Rang/CEFR aus Kelly-Wortliste (words-Tabelle) — nur wenn Sprache in D1
+        let origRank = null, origCefr = null;
+        if (languageId !== null) {
+          const origRow = await env.DB.prepare(
+            `SELECT rank, cefr_level FROM words WHERE language_id = ? AND lemma = ?`
+          ).bind(languageId, lemma.toLowerCase()).first();
+          if (origRow) { origRank = origRow.rank; origCefr = origRow.cefr_level; }
+        }
+
+        // 3. Prompt bauen — sprachenabhängig.
+        //    Template mit den sprachspezifischen Beispiel-Wörtern gefüllt.
+        const LANG_NAME = { ru: "Russian", es: "Spanish", de: "German" }[langCode] || langCode;
+        const SCRIPT = { ru: "Cyrillic", es: "Latin", de: "Latin" }[langCode] || "Latin";
+        const EX_WORD = { ru: "храбрый", es: "muchacho", de: "kaufmännisch" }[langCode] || "X";
+        const EX_SYN = { ru: "смелый", es: "chico", de: "geschäftlich" }[langCode] || "Y";
+        const synSystem =
+          "You are an expert in " + LANG_NAME + " language and language pedagogy. " +
+          "The reader is an English-speaking adult learner of " + LANG_NAME + " (CEFR A1/A2).\n\n" +
+          "CRITICAL: You are working with " + LANG_NAME + " words. The input is a " +
+          LANG_NAME + " word and the synonym you return MUST be a " + LANG_NAME +
+          " word written in " + SCRIPT + " script. Do NOT translate to another language. " +
+          "Do NOT return a Spanish/Latin synonym for a Russian word, or vice versa.\n\n" +
+          "Your task: for the given " + LANG_NAME + " word, find ONE SIMPLER, MORE COMMON " +
+          LANG_NAME + " synonym (in " + SCRIPT + " script) that such a learner would know, " +
+          "and judge how well it preserves the meaning.\n\n" +
+          "Return a JSON object with EXACTLY these keys:\n" +
+          '  "synonym":      a SIMPLER, more common ' + LANG_NAME + ' lemma in ' + SCRIPT + ' script, or "" if none preserves the meaning\n' +
+          '  "en_syn":       short English gloss of the synonym, or "" if synonym is ""\n' +
+          '  "semantic_pct": integer 0-100: how completely the SYNONYM preserves the meaning. ' +
+          "100 = perfect synonym (e.g. '" + EX_WORD + "'->'" + EX_SYN + "'). " +
+          "Lower if it loses specificity, register, or nuance.\n" +
+          '  "note":         very short reason if semantic_pct < 100, else ""\n\n' +
+          "RULES:\n" +
+          "- The synonym MUST be a real, common " + LANG_NAME + " word in lemma form, written in " + SCRIPT + " script.\n" +
+          "- Prefer frequent everyday words over rare/literary ones.\n" +
+          "- If no good simpler synonym exists, set synonym=\"\".\n" +
+          "- Proper nouns, regionalisms, highly specific terms -> synonym=\"\".\n" +
+          "- Return ONLY the JSON object. No prose, no code fences.";
+        const synUser =
+          LANG_NAME + ' word: "' + lemma + '"\n\nReturn ONLY the JSON object. The synonym must be a ' + LANG_NAME + ' word in ' + SCRIPT + ' script.';
+
+        // 4. GLM aufrufen (Anthropic-Endpunkt, Retry + CJK-Validierung wie /api/simplify)
+        let parsed = null;
+        let lastError = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+          try {
+            const glmRes = await fetch("https://open.bigmodel.cn/api/anthropic/v1/messages", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-api-key": env.GLM_API_KEY,
+                "anthropic-version": "2023-06-01",
+              },
+              body: JSON.stringify({
+                model: "glm-4.6",
+                max_tokens: 300,
+                system: synSystem,
+                messages: [{ role: "user", content: synUser }],
+                temperature: 0.3,
+              }),
+            });
+            if (glmRes.ok) {
+              const glmData = await glmRes.json();
+              const contentParts = glmData.content || [];
+              let candidate = contentParts
+                .filter((p) => p.type === "text")
+                .map((p) => p.text)
+                .join("")
+                .trim();
+              const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(candidate);
+              if (hasCJK) {
+                lastError = "CJK-Zeichen in Ausgabe (Sprache verloren)";
+                if (attempt > 0) break;
+                continue;
+              }
+              // JSON aus der Antwort lösen (GLM packt es gelegentlich in Prosa/fences)
+              let obj = null;
+              try { obj = JSON.parse(candidate); }
+              catch (_) {
+                const start = candidate.indexOf("{");
+                const end = candidate.lastIndexOf("}");
+                if (start >= 0 && end > start) {
+                  try { obj = JSON.parse(candidate.slice(start, end + 1)); } catch (__) {}
+                }
+              }
+              if (obj && typeof obj === "object") {
+                // Skript-Validierung: für Russisch muss das Synonym kyrillisch sein
+                // (GLM driftet sonst ins Spanische/Lateinische ab, z.B. "grande").
+                if (langCode === "ru" && obj.synonym) {
+                  const synTrim = String(obj.synonym).trim();
+                  const hasCyrillic = /[А-Яа-яЁё]/.test(synTrim);
+                  if (!hasCyrillic) {
+                    lastError = "Synonym nicht kyrillisch (Sprache verloren): " + synTrim.slice(0, 40);
+                    if (attempt > 0) { parsed = obj; break; } // beim letzten Versuch trotzdem nehmen
+                    continue; // retry
+                  }
+                }
+                parsed = obj;
+                break;
+              }
+              lastError = "Konnte JSON nicht parsen: " + candidate.slice(0, 120);
+            } else {
+              const errText = await glmRes.text();
+              lastError = errText;
+              if (!errText.includes("1302")) break;
+            }
+          } catch (e) {
+            lastError = e.message;
+          }
+        }
+
+        if (!parsed) {
+          return json({ error: "GLM-Fehler: " + (lastError || "unbekannt") }, 502);
+        }
+
+        // 5. Synonym-Rang/CEFR nachschlagen (wenn ein Synonym geliefert wurde + Sprache in D1)
+        let synRank = null, synCefr = null;
+        const syn = (parsed.synonym || "").trim().toLowerCase();
+        if (syn && languageId !== null) {
+          const synRow = await env.DB.prepare(
+            `SELECT rank, cefr_level FROM words WHERE language_id = ? AND lemma = ?`
+          ).bind(languageId, syn).first();
+          if (synRow) { synRank = synRow.rank; synCefr = synRow.cefr_level; }
+        }
+
+        return json({
+          lemma,
+          lang: langCode,
+          orig_rank: origRank,
+          orig_cefr: origCefr,
+          synonym: parsed.synonym || "",
+          en_syn: parsed.en_syn || "",
+          semantic_pct: parsed.semantic_pct,
+          note: parsed.note || "",
+          syn_rank: synRank,
+          syn_cefr: synCefr,
+        });
       }
 
       return json({ error: "Unbekannter Endpoint: " + path }, 404);

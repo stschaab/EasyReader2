@@ -6,6 +6,7 @@
   <title>EasyReader2 — Война и мир</title>
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
   <style>
     :root {
       --bg: #0f1115;
@@ -333,6 +334,99 @@
     .syn-popup .syn-meta .rank { color: var(--muted-2); }
     .syn-popup .syn-note { color: var(--muted); font-size: 0.78rem; font-style: italic; margin-top: 0.7rem; }
     .syn-popup .syn-empty { color: var(--muted); line-height: 1.5; }
+    /* Bug-Report-Dialog (Screenshot + Spracheingabe) */
+    .bug-overlay {
+      position: fixed; inset: 0; z-index: 170;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex; align-items: center; justify-content: center;
+      padding: 1.2rem;
+    }
+    .bug-overlay.hidden { display: none; }
+    .bug-popup {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 14px; padding: 1.3rem; max-width: 420px; width: 100%;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); position: relative;
+      font-family: inherit; max-height: calc(100vh - 2.4rem); overflow-y: auto;
+    }
+    .bug-popup .bug-head {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 0.9rem;
+    }
+    .bug-popup .bug-title {
+      font-size: 0.95rem; font-weight: 600; color: var(--text);
+    }
+    .bug-popup .bug-close {
+      background: transparent; border: none; color: var(--muted);
+      font-size: 1.3rem; cursor: pointer; padding: 0 0.3rem; line-height: 1;
+    }
+    .bug-popup .bug-close:hover { color: var(--accent); }
+    .bug-shot-wrap { position: relative; margin-bottom: 0.8rem; }
+    .bug-shot {
+      width: 100%; border: 1px solid var(--border); border-radius: 8px;
+      display: block; max-height: 220px; object-fit: contain;
+      background: var(--bg);
+    }
+    .bug-shot-rm {
+      position: absolute; top: 6px; right: 6px;
+      background: rgba(0, 0, 0, 0.65); color: var(--text);
+      border: none; border-radius: 6px; padding: 0.25rem 0.45rem;
+      font-size: 0.85rem; cursor: pointer; line-height: 1;
+    }
+    .bug-shot-rm:hover { background: var(--accent); }
+    .bug-shot-hint {
+      font-size: 0.75rem; color: var(--muted-2); line-height: 1.4;
+      background: var(--accent-soft); border-radius: 6px;
+      padding: 0.45rem 0.6rem; margin-bottom: 0.8rem;
+    }
+    .bug-field-label {
+      display: block; font-size: 0.72rem; color: var(--muted-2);
+      text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem;
+    }
+    .bug-desc {
+      width: 100%; box-sizing: border-box;
+      background: var(--card-2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 0.6rem 0.7rem;
+      color: var(--text); font-family: inherit; font-size: 0.92rem;
+      resize: vertical; min-height: 70px; line-height: 1.4;
+    }
+    .bug-desc:focus { outline: none; border-color: var(--accent); }
+    .bug-actions {
+      display: flex; gap: 0.5rem; justify-content: flex-end;
+      margin-top: 0.8rem; flex-wrap: wrap;
+    }
+    .bug-popup .bug-mic,
+    .bug-popup .bug-cancel,
+    .bug-popup .bug-send {
+      font-family: inherit; font-size: 0.85rem; cursor: pointer;
+      border-radius: 999px; padding: 0.45rem 0.95rem; border: 1px solid var(--border);
+      background: var(--card-2); color: var(--text); transition: all 0.12s;
+    }
+    .bug-popup .bug-mic:hover { border-color: var(--accent); color: var(--accent); }
+    .bug-popup .bug-mic.recording {
+      background: #b3261e; border-color: #b3261e; color: #fff;
+      animation: bugpulse 1s ease-in-out infinite;
+    }
+    .bug-popup .bug-cancel:hover { border-color: var(--muted); color: var(--muted); }
+    .bug-popup .bug-send {
+      background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
+      font-weight: 600;
+    }
+    .bug-popup .bug-send:hover { background: var(--accent); color: var(--bg); }
+    .bug-popup .bug-send:disabled {
+      opacity: 0.5; cursor: default; background: var(--card-2);
+      border-color: var(--border); color: var(--muted-2);
+    }
+    @keyframes bugpulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+    .bug-status {
+      margin-top: 0.7rem; font-size: 0.8rem; line-height: 1.4;
+      text-align: right; min-height: 1.1rem;
+    }
+    .bug-status.ok { color: var(--ok); }
+    .bug-status.err { color: #e57373; }
+    .bug-status.busy { color: var(--muted); }
     /* Update-Banner (neue Version verfügbar) */
     #update-banner {
       position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
@@ -439,6 +533,7 @@
       </div>
       <button class="library-btn" id="library-btn" aria-label="Bibliothek">📚</button>
       <button class="library-btn review-btn" id="review-btn" aria-label="Vokabeln üben">🎓<span class="due-badge" id="due-badge"></span></button>
+      <button class="library-btn bug-btn" id="bug-btn" aria-label="Fehler melden" title="Fehler melden">🐛</button>
     </header>
 
     <!-- Review-Overlay (Vokabeltrainer) -->
@@ -446,6 +541,7 @@
       <div class="review-topbar">
         <button class="review-topbar-btn" id="review-lib-btn" title="Zur Bibliothek">📚</button>
         <button class="review-topbar-btn" id="review-deck-btn" title="Alle Karten (Liste)">📋</button>
+        <button class="review-topbar-btn" id="review-bug-btn" title="Fehler melden">🐛</button>
         <label class="review-autoplay-label" title="Satz automatisch vorlesen beim Kartenwechsel">
           <input type="checkbox" id="review-autoplay-cb"> Autoplay
         </label>
@@ -460,6 +556,30 @@
     <div class="syn-overlay hidden" id="syn-overlay">
       <div class="syn-popup" id="syn-popup">
         <!-- wird per JS gefüllt -->
+      </div>
+    </div>
+
+    <!-- Bug-Report-Dialog (Screenshot + optionale Spracheingabe) -->
+    <div class="bug-overlay hidden" id="bug-overlay">
+      <div class="bug-popup" id="bug-popup">
+        <div class="bug-head">
+          <span class="bug-title">🐛 Fehler melden</span>
+          <button class="bug-close" id="bug-close" title="Schließen">✕</button>
+        </div>
+        <div class="bug-shot-wrap" id="bug-shot-wrap" hidden>
+          <img id="bug-shot-preview" class="bug-shot" alt="Screenshot der aktuellen Ansicht" />
+          <button class="bug-shot-rm" id="bug-shot-rm" title="Screenshot entfernen">🗑</button>
+        </div>
+        <div class="bug-shot-hint" id="bug-shot-hint" hidden></div>
+        <label class="bug-field-label" for="bug-desc">Beschreibung</label>
+        <textarea id="bug-desc" class="bug-desc" rows="4"
+          placeholder="Was ist passiert? Was hast du erwartet? (optional)"></textarea>
+        <div class="bug-actions">
+          <button id="bug-mic" class="bug-mic" hidden>🎤 Diktieren</button>
+          <button id="bug-cancel" class="bug-cancel">Abbrechen</button>
+          <button id="bug-send" class="bug-send">Senden</button>
+        </div>
+        <div id="bug-status" class="bug-status"></div>
       </div>
     </div>
 
@@ -496,7 +616,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.18";
+      const VERSION = "7.19";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1903,6 +2023,261 @@
           return;
         }
         startTTS(false);
+      });
+
+      // ─── Bug-Report (Screenshot via html2canvas + optionale Spracheingabe) ───
+      const bugOverlay = document.getElementById("bug-overlay");
+      const bugClose = document.getElementById("bug-close");
+      const bugShotWrap = document.getElementById("bug-shot-wrap");
+      const bugShotPreview = document.getElementById("bug-shot-preview");
+      const bugShotRm = document.getElementById("bug-shot-rm");
+      const bugShotHint = document.getElementById("bug-shot-hint");
+      const bugDesc = document.getElementById("bug-desc");
+      const bugMic = document.getElementById("bug-mic");
+      const bugCancel = document.getElementById("bug-cancel");
+      const bugSend = document.getElementById("bug-send");
+      const bugStatus = document.getElementById("bug-status");
+      let bugScreenshot = null;         // aktuelle data-url oder null
+      let bugRecognition = null;        // aktive SpeechRecognition-Instanz oder null
+
+      // Spracheingabe nur anzeigen, wenn die API vorhanden ist (Chrome/Edge/Android).
+      const SpeechRecognitionCtor =
+        window.SpeechRecognition || window.webkitSpeechRecognition || null;
+      if (SpeechRecognitionCtor) bugMic.hidden = false;
+
+      function bugSetStatus(msg, cls) {
+        bugStatus.textContent = msg || "";
+        bugStatus.className = "bug-status" + (cls ? " " + cls : "");
+      }
+
+      // Screenshot als data-url, skaliert auf max 1280px Breite, JPEG 0.7.
+      // html2canvas fehlt gelegentlich (CDN geblockt) oder hängt bei
+      // CORS-Bild-Anfragen -> Timeout nach 8s, dann null (ohne Screenshot fortfahren).
+      async function captureScreenshot() {
+        if (typeof html2canvas !== "function") return null;
+        try {
+          // Timeout-Rennen: html2canvas hat keinen nativen Abbruch.
+          const SHOT_TIMEOUT_MS = 8000;
+          const canvas = await Promise.race([
+            html2canvas(document.body, {
+              scale: 1,
+              useCORS: true,
+              logging: false,
+              backgroundColor: getComputedStyle(document.body).backgroundColor || "#0f1115",
+            }),
+            new Promise(function (_, reject) {
+              setTimeout(function () { reject(new Error("screenshot-timeout")); }, SHOT_TIMEOUT_MS);
+            }),
+          ]);
+          // Auf max 1280px Breite herunterskalieren (Datenvolumen reduzieren)
+          const MAXW = 1280;
+          let out = canvas;
+          if (canvas.width > MAXW) {
+            const scale = MAXW / canvas.width;
+            out = document.createElement("canvas");
+            out.width = MAXW;
+            out.height = Math.round(canvas.height * scale);
+            out.getContext("2d").drawImage(canvas, 0, 0, out.width, out.height);
+          }
+          return out.toDataURL("image/jpeg", 0.7);
+        } catch (e) {
+          return null;
+        }
+      }
+
+      async function openBugReport() {
+        // Dialog zurücksetzen
+        bugDesc.value = "";
+        bugScreenshot = null;
+        bugShotPreview.removeAttribute("src");
+        bugShotWrap.hidden = true;
+        bugShotHint.hidden = true;
+        bugSetStatus("", "");
+        bugSend.disabled = false;
+        bugSend.textContent = "Senden";
+
+        // Overlay SOFORT öffnen (mit Lade-Indikator), dann Screenshot im
+        // Hintergrund erstellen. So blockiert html2canvas nicht die UI und
+        // der User sieht sofort Feedback. Der Screenshot erfasst trotzdem das
+        // offene Wörterbuch-Popup, weil das ein separates Element am body ist
+        // und erst nachträglich (beim Schließen des Bug-Overlays) verdeckt wird.
+        bugShotHint.hidden = false;
+        bugShotHint.textContent = "📸 Erstelle Screenshot …";
+        bugOverlay.classList.remove("hidden");
+        setTimeout(function () { bugDesc.focus(); }, 50);
+
+        const shot = await captureScreenshot();
+        // Nur übernehmen, wenn der Dialog noch offen ist (User könnte inzwischen
+        // abgebrochen haben).
+        if (bugOverlay.classList.contains("hidden")) return;
+        if (shot) {
+          bugScreenshot = shot;
+          bugShotPreview.src = shot;
+          bugShotWrap.hidden = false;
+          bugShotHint.hidden = true;
+        } else {
+          // Screenshot nicht möglich (html2canvas fehlgeschlagen/fehlend/Timeout)
+          bugShotWrap.hidden = true;
+          bugShotHint.hidden = false;
+          bugShotHint.textContent =
+            "Screenshot nicht verfügbar (Browser-Einschränkung). " +
+            "Du kannst optional trotzdem eine Beschreibung eingeben.";
+        }
+      }
+
+      function closeBugReport() {
+        stopBugRecognition();
+        bugOverlay.classList.add("hidden");
+        bugDesc.value = "";
+        bugScreenshot = null;
+        bugShotPreview.removeAttribute("src");
+        bugShotWrap.hidden = true;
+        bugShotHint.hidden = true;
+        bugSetStatus("", "");
+        bugSend.disabled = false;
+        bugSend.textContent = "Senden";
+      }
+
+      function startBugRecognition() {
+        if (!SpeechRecognitionCtor) return;
+        const rec = new SpeechRecognitionCtor();
+        // Sprache: TTS-Sprache des Buchs, sonst Deutsch (UI-Sprache des Nutzers)
+        rec.lang = (book && book.tts_lang) ? book.tts_lang : "de-DE";
+        rec.interimResults = true;
+        rec.continuous = true;
+        let baseText = bugDesc.value;
+        rec.onresult = function (event) {
+          let interim = "";
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const r = event.results[i];
+            if (r.isFinal) {
+              baseText = (baseText + " " + r[0].transcript).replace(/\s+/g, " ").trim();
+            } else {
+              interim += r[0].transcript;
+            }
+          }
+          bugDesc.value = (baseText + " " + interim).replace(/\s+/g, " ").trim();
+        };
+        rec.onerror = function (event) {
+          let msg = "Spracheingabe-Fehler";
+          if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+            msg = "Mikrofonzugriff verweigert.";
+          } else if (event.error === "no-speech") {
+            msg = "Keine Sprache erkannt.";
+          } else if (event.error) {
+            msg = "Spracheingabe: " + event.error;
+          }
+          bugSetStatus(msg, "err");
+          bugMic.classList.remove("recording");
+          bugMic.textContent = "🎤 Diktieren";
+          bugRecognition = null;
+        };
+        rec.onend = function () {
+          bugMic.classList.remove("recording");
+          bugMic.textContent = "🎤 Diktieren";
+          bugRecognition = null;
+        };
+        try {
+          rec.start();
+          bugRecognition = rec;
+          bugMic.classList.add("recording");
+          bugMic.textContent = "⏹ Stop";
+          bugSetStatus("", "");
+        } catch (e) {
+          bugSetStatus("Spracheingabe konnte nicht gestartet werden.", "err");
+        }
+      }
+      function stopBugRecognition() {
+        if (bugRecognition) {
+          try { bugRecognition.stop(); } catch (e) {}
+          bugRecognition = null;
+          bugMic.classList.remove("recording");
+          bugMic.textContent = "🎤 Diktieren";
+        }
+      }
+      function toggleBugRecognition() {
+        if (bugRecognition) stopBugRecognition();
+        else startBugRecognition();
+      }
+
+      // Senden mit Fallback: schlägt das API fehl, Report als JSON-Datei anbieten.
+      function downloadBugReport(payload) {
+        try {
+          const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "easyreader2-bugreport-" + Date.now() + ".json";
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        } catch (e) { /* ignore */ }
+      }
+
+      async function sendBugReport() {
+        const description = bugDesc.value.trim();
+        if (!description && !bugScreenshot) {
+          bugSetStatus("Bitte Beschreibung eingeben oder Screenshot beifügen.", "err");
+          return;
+        }
+        stopBugRecognition();
+        bugSend.disabled = true;
+        bugCancel.disabled = true;
+        bugSend.textContent = "Senden …";
+        bugSetStatus("Sende Report …", "busy");
+        const payload = {
+          description: description,
+          screenshot: bugScreenshot,
+          version: VERSION,
+          book_id: bookId || null,
+          chunk_index: Number.isInteger(idx) ? idx : null,
+          level: level || null,
+        };
+        try {
+          const data = await apiPost("/api/bug-report", payload);
+          if (data && data.ok) {
+            bugSetStatus(
+              "Danke! Report gesendet." + (data.id ? " (#" + data.id + ")" : ""),
+              "ok"
+            );
+            if (data.screenshot_dropped) {
+              bugSetStatus("Report gesendet, Screenshot war zu groß und wurde verworfen.", "ok");
+            }
+            setTimeout(closeBugReport, 2000);
+            return;
+          }
+          throw new Error(data && data.error ? data.error : "unbekannt");
+        } catch (e) {
+          // Fallback: lokal herunterladbare Datei
+          bugSetStatus(
+            "Senden fehlgeschlagen (" + (e.message || "Netzwerk") +
+            "). Report wird lokal gespeichert.",
+            "err"
+          );
+          downloadBugReport(Object.assign({ user_id: userId, user_agent: navigator.userAgent, fallback: true }, payload));
+        } finally {
+          bugSend.disabled = false;
+          bugCancel.disabled = false;
+          bugSend.textContent = "Senden";
+        }
+      }
+
+      // Event-Listener
+      document.getElementById("bug-btn").addEventListener("click", openBugReport);
+      document.getElementById("review-bug-btn").addEventListener("click", openBugReport);
+      bugClose.addEventListener("click", closeBugReport);
+      bugCancel.addEventListener("click", closeBugReport);
+      bugSend.addEventListener("click", sendBugReport);
+      bugMic.addEventListener("click", toggleBugRecognition);
+      bugShotRm.addEventListener("click", function () {
+        bugScreenshot = null;
+        bugShotPreview.removeAttribute("src");
+        bugShotWrap.hidden = true;
+      });
+      // Hintergrund-Tap schließt (wie syn-overlay), aber nicht während des Sendens
+      bugOverlay.addEventListener("click", function (e) {
+        if (e.target === bugOverlay) closeBugReport();
       });
 
       // Start
