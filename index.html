@@ -496,7 +496,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.15";
+      const VERSION = "7.16";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -789,17 +789,24 @@
             levelsEl.appendChild(b);
           });
 
-          // Progress laden (optional, localStorage-Fallback)
+          // Progress laden. Reihenfolge: API (D1) → localStorage (Fallback).
+          // WICHTIG: localStorage wird auch herangezogen, wenn die API zwar
+          // antwortet, aber keinen Stand für dieses Buch hat (z. B. weil es
+          // erst nach Worker-Ausfall gelesen wurde). Früher steckte der
+          // localStorage-Fallback nur im catch-Block und wurde so bei
+          // `{progress: null}`-Antworten ignoriert → Position verloren.
           idx = 0; level = "original";
+          let progressLoaded = false;
           try {
             const saved = await apiGet("/api/progress/" + id);
-            if (saved.progress) {
+            if (saved && saved.progress) {
               idx = Math.min(Math.max(saved.progress.chunk_index || 0, 0), chunks.length - 1);
               const savedLvl = saved.progress.level;
               level = LEVELS.includes(savedLvl) ? savedLvl : "original";
+              progressLoaded = true;
             }
-          } catch (e) {
-            // Fallback: localStorage
+          } catch (e) { /* API nicht erreichbar → localStorage-Fallback unten */ }
+          if (!progressLoaded) {
             const ls = localStorage.getItem("er2_" + id + "_pos");
             if (ls) { try { const p = JSON.parse(ls); idx = p.idx || 0; level = p.level || "original"; } catch (e2) {} }
           }
