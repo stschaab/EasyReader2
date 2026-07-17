@@ -633,7 +633,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.21";
+      const VERSION = "7.22";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -2205,16 +2205,34 @@
         rec.lang = bugCurrentLang().bcp47;
         rec.interimResults = true;
         rec.continuous = true;
+        // Textverwaltung: baseText = alles final Erkannte (bleibt).
+        //   interim = aktuell gesprochen, noch nicht final (wird jedes Event
+        //   neu überschrieben). lastProcessedIdx verhindert, dass ein final
+        //   Ergebnis mehrfach appended wird (klassischer SpeechRecognition-Bug:
+        //   finale Resultate bleiben im event.results-Array und werden sonst
+        //   bei jedem folgenden Event erneut angehängt → Wiederholungen).
         let baseText = bugDesc.value;
+        let lastProcessedIdx = 0;
+        rec.onstart = function () {
+          // Beim Start Index auf aktuelle Länge setzen, damit nur neue
+          // Ergebnisse verarbeitet werden.
+          lastProcessedIdx = 0;
+          baseText = bugDesc.value;
+        };
         rec.onresult = function (event) {
           let interim = "";
+          // Nur NEUE Ergebnisse seit dem letzten Event verarbeiten.
           for (let i = event.resultIndex; i < event.results.length; i++) {
             const r = event.results[i];
             if (r.isFinal) {
               baseText = (baseText + " " + r[0].transcript).replace(/\s+/g, " ").trim();
-            } else {
-              interim += r[0].transcript;
+              lastProcessedIdx = i + 1;
             }
+          }
+          // Aktuelle Interim-Ergebnisse (nur die noch nicht-finalen am Ende)
+          for (let i = lastProcessedIdx; i < event.results.length; i++) {
+            const r = event.results[i];
+            if (!r.isFinal) interim += r[0].transcript;
           }
           bugDesc.value = (baseText + " " + interim).replace(/\s+/g, " ").trim();
         };
