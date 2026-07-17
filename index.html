@@ -392,8 +392,22 @@
     .bug-desc:focus { outline: none; border-color: var(--accent); }
     .bug-actions {
       display: flex; gap: 0.5rem; justify-content: flex-end;
-      margin-top: 0.8rem; flex-wrap: wrap;
+      margin-top: 0.8rem; flex-wrap: wrap; align-items: center;
     }
+    /* Sprachauswahl-Gruppe: Mic + Sprach-Pille zusammen, linksbündig */
+    .bug-voice-group {
+      display: flex; gap: 0.4rem; align-items: center;
+      margin-right: auto;  /* drückt Cancel/Senden nach rechts */
+    }
+    .bug-popup .bug-lang {
+      font-family: inherit; font-size: 0.72rem; font-weight: 700;
+      cursor: pointer; border-radius: 999px;
+      padding: 0.4rem 0.6rem; min-width: 2.4rem;
+      border: 1px solid var(--border); background: var(--card-2);
+      color: var(--accent); text-transform: uppercase; letter-spacing: 0.03em;
+      transition: all 0.12s; line-height: 1;
+    }
+    .bug-popup .bug-lang:hover { border-color: var(--accent); background: var(--accent-soft); }
     .bug-popup .bug-mic,
     .bug-popup .bug-cancel,
     .bug-popup .bug-send {
@@ -575,7 +589,10 @@
         <textarea id="bug-desc" class="bug-desc" rows="4"
           placeholder="Was ist passiert? Was hast du erwartet? (optional)"></textarea>
         <div class="bug-actions">
-          <button id="bug-mic" class="bug-mic" hidden>🎤 Diktieren</button>
+          <div class="bug-voice-group">
+            <button id="bug-mic" class="bug-mic" hidden>🎤 Diktieren</button>
+            <button id="bug-lang" class="bug-lang" hidden title="Sprache für Diktat wechseln">DE</button>
+          </div>
           <button id="bug-cancel" class="bug-cancel">Abbrechen</button>
           <button id="bug-send" class="bug-send">Senden</button>
         </div>
@@ -616,7 +633,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.19";
+      const VERSION = "7.20";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -2034,6 +2051,7 @@
       const bugShotHint = document.getElementById("bug-shot-hint");
       const bugDesc = document.getElementById("bug-desc");
       const bugMic = document.getElementById("bug-mic");
+      const bugLang = document.getElementById("bug-lang");
       const bugCancel = document.getElementById("bug-cancel");
       const bugSend = document.getElementById("bug-send");
       const bugStatus = document.getElementById("bug-status");
@@ -2043,7 +2061,36 @@
       // Spracheingabe nur anzeigen, wenn die API vorhanden ist (Chrome/Edge/Android).
       const SpeechRecognitionCtor =
         window.SpeechRecognition || window.webkitSpeechRecognition || null;
-      if (SpeechRecognitionCtor) bugMic.hidden = false;
+
+      // Verfügbare Diktat-Sprachen (Label = Kurzwort für die Pille,
+      // bcp47 = Wert für rec.lang). Reihenfolge = Klick-Reihenfolge.
+      const BUG_LANGS = [
+        { label: "DE", bcp47: "de-DE" },
+        { label: "EN", bcp47: "en-US" },
+        { label: "ES", bcp47: "es-ES" },
+        { label: "RU", bcp47: "ru-RU" },
+        { label: "FR", bcp47: "fr-FR" },
+      ];
+      // Default: Browsersprache, wenn gemappt, sonst DE.
+      function bugDefaultLang() {
+        const nav = (navigator.language || "de-DE").toLowerCase();
+        for (const l of BUG_LANGS) {
+          if (nav === l.bcp47.toLowerCase() || nav.startsWith(l.bcp47.slice(0, 2).toLowerCase())) {
+            return l;
+          }
+        }
+        return BUG_LANGS[0]; // DE
+      }
+      let bugLangIdx = BUG_LANGS.indexOf(bugDefaultLang());
+      if (bugLangIdx < 0) bugLangIdx = 0;
+      function bugCurrentLang() { return BUG_LANGS[bugLangIdx]; }
+      function bugRenderLang() { bugLang.textContent = bugCurrentLang().label; }
+
+      if (SpeechRecognitionCtor) {
+        bugMic.hidden = false;
+        bugLang.hidden = false;
+        bugRenderLang();
+      }
 
       function bugSetStatus(msg, cls) {
         bugStatus.textContent = msg || "";
@@ -2141,12 +2188,12 @@
       function startBugRecognition() {
         if (!SpeechRecognitionCtor) return;
         const rec = new SpeechRecognitionCtor();
-        // Sprache: UI-Sprache des Nutzers (nicht Buch-Sprache!). Eine
-        // Bug-Beschreibung schreibt man in der Bedien-Sprache, nicht in der
-        // Sprache des gerade geleseenen Textes — sonst wird z.B. deutsches
-        // Diktat bei einem russischen Buch als russisch interpretiert → Gibberish.
-        // navigator.language = Browsersprache (z.B. "de", "de-DE", "en-US").
-        rec.lang = (navigator.language || "de-DE");
+        // Sprache: vom Nutzer gewählte Diktat-Sprache (Pille im Dialog).
+        // Default = Browsersprache (navigator.language), umschaltbar via bug-lang.
+        // NICHT die Buch-Sprache — eine Bug-Beschreibung diktiert man in der
+        // Bedien-Sprache, sonst wird z.B. deutsches Diktat bei einem spanischen
+        // Buch als Spanisch interpretiert → Gibberish.
+        rec.lang = bugCurrentLang().bcp47;
         rec.interimResults = true;
         rec.continuous = true;
         let baseText = bugDesc.value;
@@ -2274,6 +2321,16 @@
       bugCancel.addEventListener("click", closeBugReport);
       bugSend.addEventListener("click", sendBugReport);
       bugMic.addEventListener("click", toggleBugRecognition);
+      // Sprach-Umschalter: klickt zyklisch durch BUG_LANGS.
+      // Falls gerade aufgenommen wird, Recognition mit neuer Sprache neu starten.
+      bugLang.addEventListener("click", function () {
+        bugLangIdx = (bugLangIdx + 1) % BUG_LANGS.length;
+        bugRenderLang();
+        if (bugRecognition) {
+          stopBugRecognition();
+          startBugRecognition();
+        }
+      });
       bugShotRm.addEventListener("click", function () {
         bugScreenshot = null;
         bugShotPreview.removeAttribute("src");
