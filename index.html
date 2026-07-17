@@ -496,7 +496,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.17";
+      const VERSION = "7.18";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1511,10 +1511,18 @@
       }
       function rankForLemma(lemma) {
         if (!rankMap || !lemma) return null;
-        // Deutsch: case-sensitiv (Bruder != bruder), dann lowercase-Fallback.
+        // Deutsch: case-sensitiv (Bruder != bruder), dann lowercase-Fallback,
+        // dann capitalisiert (Substantiv: justizirrtum → Justizirrtum). Die
+        // Lemma-Liste ist case-erhalten (Substantive groß); ein kleingeschriebenes
+        // Wort im Text muss daher auch in der capitalisierten Form gesucht werden.
         // Spanisch etc.: lowercase (Grossschreibung dort nicht grammatikalisch).
         if (rankMapLoadedFor === "de" || (!rankMapLoadedFor && wiktLang() === "de")) {
-          return rankMap[lemma] || rankMap[lemma.toLowerCase()] || null;
+          if (rankMap[lemma]) return rankMap[lemma];
+          if (rankMap[lemma.toLowerCase()]) return rankMap[lemma.toLowerCase()];
+          // Capitalisierte Variante: erster Buchstabe groß, Rest wie geliefert.
+          const cap = lemma.charAt(0).toUpperCase() + lemma.slice(1);
+          if (cap !== lemma && rankMap[cap]) return rankMap[cap];
+          return null;
         }
         return rankMap[lemma.toLowerCase()] || null;
       }
@@ -1587,21 +1595,43 @@
         if (/ÁÉÍÓÚÜáéíóúüÑñ/.test(wr)) return /[^A-Za-zÁÉÍÓÚÜáéíóúüÑñ]/g;  // Spanisch
         return /[^А-Яа-яЁё]/g;  // Russisch (Default)
       }
-      function extractLemma(html, lang) {
+      // Normalisiere sprachspezifische Zeichen für die Stamm-Ähnlichkeits-
+      // prüfung (z. B. Häuser→Hauser, so dass „Haus" als Präfix erkannt wird).
+      function normalizeStem(s) {
+        return s.toLowerCase()
+          .replace(/ä/g, "a").replace(/ö/g, "o").replace(/ü/g, "u").replace(/ß/g, "ss")
+          .replace(/á/g, "a").replace(/é/g, "e").replace(/í/g, "i").replace(/ó/g, "o").replace(/ú/g, "u").replace(/ü/g, "u").replace(/ñ/g, "n");
+      }
+      function extractLemma(html, lang, clickedWord) {
         // „of <Wort>"-Pattern. Wort-Zeichenklasse hängt von der Sprache ab.
         // Negative Lookahead: ignoriert Artikel (of a/the/an …), die fälschlich
         // als Lemma matched haben (z. B. „handrail … of a staircase" → „a").
-        if (lang === "de") {
-          const m = html.match(/of\s+(?![Tt]he\b|[Aa]n?\b)([A-Za-zÄÖÜäöüß]+)/);
-          return m ? m[1] : null;
+        //
+        // Plausibilitäts-Check (v7.18): Wiktionary-Definitionen sind auf
+        // Englisch, das „of <Wort>"-Pattern matched daher oft auf ein
+        // ENGLISCHES Wort (z. B. „miscarriage of justice" → „justice" statt
+        // Lemma „Justizirrtum"). Ein extrahiertes Lemma gilt nur als
+        // glaubwürdig, wenn es mit dem geklickten Wort einen Stamm teilt
+        // (Beugung: Tische→Tisch, Kinder→Kind, Häuser→Haus). Umlaut-Wechsel
+        // (ä→a) werden bei der Stamm-Prüfung normalisiert. False-Positives
+        // aus englischen Definitionen (justice bei Justizirrtum) teilen keinen
+        // Stamm und werden verworfen → Lemma = geklicktes Wort.
+        let charClass;
+        if (lang === "de") charClass = "[A-Za-zÄÖÜäöüß]";
+        else if (lang === "es") charClass = "[A-Za-zÁÉÍÓÚÜáéíóúüÑñ]";
+        else charClass = "[А-Яа-яЁё]";
+        const m = html.match(new RegExp("of\\s+(?![Tt]he\\b|[Aa]n?\\b)(" + charClass + "+)"));
+        if (!m) return null;
+        const candidate = m[1];
+        // Stamm-Ähnlichkeit: Kandidat muss mit geklicktem Wort einen Stamm
+        // teilen (Präfix in mindestens einer Richtung, mind. 3 Zeichen).
+        if (clickedWord) {
+          const cl = normalizeStem(candidate);
+          const wl = normalizeStem(clickedWord);
+          const sharesStem = cl.length >= 3 && (wl.startsWith(cl) || cl.startsWith(wl) || cl === wl);
+          if (!sharesStem) return null;
         }
-        if (lang === "es") {
-          const m = html.match(/of\s+(?![Tt]he\b|[Aa]n?\b)([A-Za-zÁÉÍÓÚÜáéíóúüÑñ]+)/);
-          return m ? m[1] : null;
-        }
-        // Russisch: Artikel gibt es nicht, Lookahead nur aus Konsistenz.
-        const m = html.match(/of\s+(?![Tt]he\b|[Aa]n?\b)([А-Яа-яЁё][А-Яа-яЁё]*(?:́[А-Яа-яЁё]+)?)/);
-        return m ? m[1] : null;
+        return candidate;
       }
       function stripAccents(w) { return w.replace(/\u0301/g, ""); }
 
@@ -1667,7 +1697,7 @@
           const json = await res.json();
           if (!json[lang] || !json[lang].length) return null;
           const section = json[lang][0], def0 = section.definitions[0], defText = stripTags(def0.definition);
-          const lemma = extractLemma(defText, lang);
+          const lemma = extractLemma(defText, lang, word);
           let gloss = defText, displayLemma = word;
           if (lemma && lemma.toLowerCase() !== word.toLowerCase()) {
             displayLemma = lemma;
