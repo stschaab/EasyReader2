@@ -496,7 +496,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.16";
+      const VERSION = "7.17";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -756,6 +756,16 @@
           } else {
             LEVELS = ["original", "4000", "3000", "2000", "1000"];
           }
+
+          // Sprachabhängige Caches zurücksetzen, damit beim Buchwechsel (z. B.
+          // Russisch → Spanisch) nicht die Rang-Maps/Wörterbuch-Einträge der
+          // vorherigen Sprache weiterverwendet werden. Sonst sucht z. B.
+          // rankForLemma("casa") in der russischen Map und zeigt "-".
+          // (Lernkarten-Deck bleibt bewusst erhalten — ist buchübergreifend.)
+          for (const k in dictCache) delete dictCache[k];  // const-Objekt leeren
+          rankMap = null; rankMapLoading = null;
+          formRankMap = null; formRankMapLoading = null;
+          rankMapLoadedFor = null;
 
           // Book-Liste wieder aktivieren (für späteren Bibliotheks-Besuch)
           bookListEl.style.opacity = "";
