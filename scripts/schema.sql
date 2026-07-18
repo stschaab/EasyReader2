@@ -185,3 +185,22 @@ CREATE TABLE IF NOT EXISTS bug_reports (
   updated_at TEXT                     -- letzte Änderung an status/type/priority/title/note
 );
 CREATE INDEX IF NOT EXISTS idx_bug_reports_created ON bug_reports(created_at DESC);
+
+-- ═══════════════════════════════════════════════════════════════
+-- TICKET-ÄNDERUNGSHISTORIE (Audit-Trail, CMMS-style)
+-- ═══════════════════════════════════════════════════════════════
+-- Jeder PATCH auf bug_reports schreibt pro wirklich geändertem Feld einen
+-- Eintrag: was (field), alter Wert, neuer Wert, von wem (userId), wann.
+-- Wird beim Löschen eines Tickets NICHT mitgelöscht (kein ON DELETE CASCADE) —
+-- die Historie bleibt nachvollziehbar, wie in einem CMMS üblich.
+CREATE TABLE IF NOT EXISTS ticket_changes (
+  id INTEGER PRIMARY KEY,
+  ticket_id INTEGER NOT NULL,
+  field TEXT NOT NULL,               -- 'status' | 'type' | 'priority' | 'title' | 'note'
+  old_value TEXT,                    -- NULL = Feld war vorher leer
+  new_value TEXT,                    -- NULL = Feld wurde geleert
+  changed_by TEXT,                   -- userId (anon-XXXXX) aus X-User-Id-Header
+  changed_at TEXT DEFAULT (datetime('now')),
+  FOREIGN KEY (ticket_id) REFERENCES bug_reports(id)
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_changes_ticket ON ticket_changes(ticket_id, changed_at DESC);

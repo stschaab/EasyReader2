@@ -12,6 +12,7 @@
 //   GET  /api/admin/bug-reports/:id – Einzelnes Ticket mit Screenshot
 //   PATCH /api/admin/bug-reports/:id – Ticket aktualisieren (status/type/...)
 //   POST  /api/admin/bug-reports/:id/suggest-title – GLM generiert Titelvorschlag
+//   GET   /api/admin/bug-reports/:id/history – Audit-Trail (wer-wann-was)
 //   DELETE /api/admin/bug-reports/:id – Ticket löschen
 //   POST /api/admin/migrate       – Schema-Migration (ALTER TABLE, idempotent)
 //   POST /api/admin/words         – Kelly-Wortlisten-Import (X-Admin-Key geschützt)
@@ -576,6 +577,30 @@ export default {
             `UPDATE bug_reports SET priority='medium' WHERE priority IS NULL`
           ).run();
         } catch (e) { /* Tabelle evtl. noch nicht da -> ignorieren */ }
+
+        // Audit-Tabelle anlegen (idempotent via IF NOT EXISTS).
+        // Schreibt bei jedem PATCH die alten+neuen Werte, von wem, wann —
+        // nicht-destruktive Historie wie im CMMS.
+        try {
+          await env.DB.prepare(
+            `CREATE TABLE IF NOT EXISTS ticket_changes (
+              id INTEGER PRIMARY KEY,
+              ticket_id INTEGER NOT NULL,
+              field TEXT NOT NULL,
+              old_value TEXT,
+              new_value TEXT,
+              changed_by TEXT,
+              changed_at TEXT DEFAULT (datetime('now')),
+              FOREIGN KEY (ticket_id) REFERENCES bug_reports(id)
+            )`
+          ).run();
+          await env.DB.prepare(
+            `CREATE INDEX IF NOT EXISTS idx_ticket_changes_ticket ON ticket_changes(ticket_id, changed_at DESC)`
+          ).run();
+          results.push({ col: "ticket_changes_table", added: true });
+        } catch (e) {
+          results.push({ col: "ticket_changes_table", added: false, reason: e.message });
+        }
         return json({ ok: true, columns: results });
       }
 
@@ -622,6 +647,9 @@ export default {
       // ─── Admin: Ticket aktualisieren (status/type/priority/title/note) ───
       // PATCH mit beliebigem Subset der Felder. Whitelist schützt vor Injection
       // (Feldnamen werden in SQL eingefügt, daher dürfen nur bekannte durch).
+      // Audit: vor dem UPDATE alte Werte laden, danach Diff-Einträge in
+      // ticket_changes schreiben (nur für Felder die sich WIRKLICH geändert
+      // haben — sonst müllt "Speichern ohne Änderung" die Historie voll).
       const bugPatchMatch = path.match(/^\/api\/admin\/bug-reports\/(\d+)$/);
       if (bugPatchMatch && request.method === "PATCH") {
         const adminKey = request.headers.get("X-Admin-Key");
@@ -636,22 +664,55 @@ export default {
           title:    (v) => typeof v === "string" ? v.slice(0, 200) : null,
           note:     (v) => typeof v === "string" ? v.slice(0, 4000) : null,
         };
-        const sets = [];
-        const vals = [];
+        // 1) Nur Felder sammeln, die gültig im Body sind.
+        const changes = {};   // field -> newValue
         for (const [field, validate] of Object.entries(allowed)) {
           if (body[field] !== undefined) {
             const cleaned = validate(body[field]);
-            if (cleaned !== null) { sets.push(`${field} = ?`); vals.push(cleaned); }
+            if (cleaned !== null) changes[field] = cleaned;
           }
         }
-        if (sets.length === 0) return json({ error: "keine gültigen Felder" }, 400);
+        const fieldsToPatch = Object.keys(changes);
+        if (fieldsToPatch.length === 0) return json({ error: "keine gültigen Felder" }, 400);
+
+        // 2) Alte Werte laden (für Audit-Diff). Nur die relevanten Felder.
+        const selectCols = fieldsToPatch.join(", ");
+        const oldRow = await env.DB.prepare(
+          `SELECT ${selectCols} FROM bug_reports WHERE id = ?`
+        ).bind(reportId).first();
+        if (!oldRow) return json({ error: "nicht gefunden" }, 404);
+
+        // 3) UPDATE bauen + ausführen.
+        const sets = fieldsToPatch.map((f) => `${f} = ?`);
+        const vals = fieldsToPatch.map((f) => changes[f]);
         sets.push(`updated_at = datetime('now')`);
         vals.push(reportId);
-        const r = await env.DB.prepare(
+        await env.DB.prepare(
           `UPDATE bug_reports SET ${sets.join(", ")} WHERE id = ?`
         ).bind(...vals).run();
-        if ((r.meta?.changes || 0) === 0) return json({ error: "nicht gefunden" }, 404);
-        return json({ ok: true, updated: r.meta?.changes || 0 });
+
+        // 4) Audit-Einträge für Felder mit echtem Diff (old !== new).
+        let auditCount = 0;
+        for (const f of fieldsToPatch) {
+          const oldVal = oldRow[f] == null ? null : String(oldRow[f]);
+          let newVal = changes[f];
+          if (newVal == null) newVal = null;
+          // String-Vergleich; NULL-Semantik: null !== "x" ist eine Änderung.
+          const changed = (oldVal === null) !== (newVal === null) || (oldVal !== newVal);
+          if (!changed) continue;
+          // Werte auf 1000 Zeichen kappen (keine Megabyte-Notizen in der History).
+          const oldSlice = oldVal == null ? null : oldVal.slice(0, 1000);
+          const newSlice = newVal == null ? null : newVal.slice(0, 1000);
+          try {
+            await env.DB.prepare(
+              `INSERT INTO ticket_changes (ticket_id, field, old_value, new_value, changed_by)
+               VALUES (?, ?, ?, ?, ?)`
+            ).bind(reportId, f, oldSlice, newSlice, userId).run();
+            auditCount++;
+          } catch (e) { /* Audit-Fehler darf UPDATE nicht ungeschehen machen */ }
+        }
+
+        return json({ ok: true, updated: fieldsToPatch.length, audited: auditCount });
       }
 
       // ─── Admin: GLM-Titel-Vorschlag für ein Ticket ───
@@ -728,6 +789,21 @@ export default {
         }
         if (!title) return json({ error: "GLM-Fehler: " + (lastError || "unbekannt") }, 502);
         return json({ ok: true, title: title });
+      }
+
+      // ─── Admin: Audit-Trail (Historie) für ein Ticket ───
+      // Liefert alle ticket_changes-Einträge, absteigend nach Datum.
+      const bugHistoryMatch = path.match(/^\/api\/admin\/bug-reports\/(\d+)\/history$/);
+      if (bugHistoryMatch && request.method === "GET") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const reportId = parseInt(bugHistoryMatch[1], 10);
+        const r = await env.DB.prepare(
+          `SELECT id, field, old_value, new_value, changed_by, changed_at
+           FROM ticket_changes WHERE ticket_id = ?
+           ORDER BY changed_at DESC, id DESC`
+        ).bind(reportId).all();
+        return json({ changes: r.results });
       }
 
       // ─── Lesefortschritt speichern ───

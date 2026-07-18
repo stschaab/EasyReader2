@@ -312,23 +312,50 @@ A/B-Test bestätigt: `князь` bleibt, wird nicht mehr zu `господин`.
 
 ---
 
-## Bug-Report-Funktion (v7.19)
+## Ticketsystem (ab v7.19, ausgebaut bis v7.25)
 
-User können über den 🐛-Button (Header + Review-Topbar) einen Bug-Report senden.
+Ehemals "Bug-Report-Funktion" — inzwischen ein leichtes Ticketsystem (CMMS-style).
+User melden über den 🐛-Button (Header + Review-Topbar); Pflege über
+`admin.html` (⚙️-Button im Header oder direkt `https://stschaab.github.io/EasyReader2/admin.html`).
 
-- **Screenshot:** `html2canvas` (CDN) rendert das aktuelle `document.body` — **inkl. offenem Wörterbuch-Popup**, weil der Screenshot läuft, *bevor* das Bug-Overlay eingeblendet wird. Bild wird auf max 1280px Breite skaliert und als JPEG (q=0.7) base64-kodiert. Fehlt `html2canvas` oder schlägt es fehl (CORS), läuft alles ohne Screenshot weiter.
-- **Spracheingabe (optional):** `SpeechRecognition`/`webkitSpeechRecognition` — Button erscheint nur, wenn die API vorhanden ist (Chrome/Edge/Android; **nicht iOS Safari**). Sprache = `book.tts_lang`, sonst `de-DE`. Interim-Ergebnisse werden live in die Textarea eingetragen.
-- **Senden:** `POST /api/bug-report` mit `{ description, screenshot, version, book_id, chunk_index, level }`. Schlägt das API fehl (Netzwerk/Worker nicht deployed), wird der Report als lokale JSON-Datei heruntergeladen (Fallback).
-- **Speicher:** D1-Tabelle `bug_reports` (wird vom Worker per `CREATE TABLE IF NOT EXISTS` automatisch angelegt). Screenshot wird serverseitig verworfen, wenn > ~750 KB base64.
-- **Auslesen (Admin):**
-  ```bash
-  curl -H "X-Admin-Key: $ADMIN_KEY" \
-    https://easyreader2.st-schaab.workers.dev/api/admin/bug-reports
-  # einzelnen Report mit Screenshot:
-  curl -H "X-Admin-Key: $ADMIN_KEY" \
-    https://easyreader2.st-schaab.workers.dev/api/admin/bug-reports/1
-  ```
-- **⚠️ Worker muss deployed sein**, damit Reports in D1 landen. Bis dahin greift der lokale Download-Fallback.
+### Melden (`index.html`)
+- **Screenshot:** `html2canvas` (CDN) rendert das aktuelle `document.body` — **inkl. offenem Wörterbuch-Popup**, weil der Screenshot im Hintergrund läuft, *nachdem* das Overlay bereits eingeblendet ist; per `onclone` wird das Overlay selbst aus dem Screenshot entfernt. Bild auf max 1280px JPEG (q=0.7) base64-kodiert, 8s Timeout.
+- **Spracheingabe (optional):** `webkitSpeechRecognition` — Button nur bei vorhandener API (Chrome/Edge/Android; **nicht iOS Safari**). Sprache über DE/EN/ES/RU/FR-Pille umschaltbar (Default = `navigator.language`). `interimResults:false` (finale Segmente nur, verhindert Wiederholungs-Bug).
+- **Senden:** `POST /api/bug-report`. Bei Netzwerkfehler → lokaler JSON-Download (Fallback).
+- **Nach dem Senden** zeigt die App die Record-# ("gespeichert als #12").
+
+### Tickets (D1: `bug_reports` + `ticket_changes`)
+Jedes Ticket hat: `type` (bug/feature/improvement), `title`, `status` (open/in_progress/on_hold/closed/rejected), `priority` (low/medium/high), `note`, `updated_at` sowie die Original-Felder (description, screenshot, user_id, version, book_id, chunk_index, level, user_agent, created_at).
+
+### Audit-Trail (CMMS-style, `ticket_changes`)
+Jeder `PATCH` schreibt **pro wirklich geändertem Feld** einen Eintrag: `field, old_value, new_value, changed_by` (=`userId` aus `X-User-Id`), `changed_at`. Werte werden auf 1000 Zeichen gekappt. Beim Löschen eines Tickets bleibt die Historie erhalten (kein ON DELETE CASCADE) — wie im CMMS üblich.
+
+### Endpunkte (alle `/api/admin/*` mit `X-Admin-Key`)
+```
+GET    /api/admin/bug-reports               – Liste (ohne Screenshots)
+GET    /api/admin/bug-reports/:id           – Einzelnes Ticket mit Screenshot
+PATCH  /api/admin/bug-reports/:id           – Felder ändern (schreibt Audit)
+POST   /api/admin/bug-reports/:id/suggest-title – GLM-Titelvorschlag
+GET    /api/admin/bug-reports/:id/history   – Audit-Verlauf
+DELETE /api/admin/bug-reports/:id           – Löschen
+POST   /api/admin/migrate                   – Schema-Migration (idempotent)
+```
+
+### `admin.html` (GitHub Pages)
+- **Login:** Admin-Key in `sessionStorage` (Tab-lokal).
+- **List-View:** Tabelle mit Filter (Status/Typ/Volltext).
+- **Detail-Drawer** (Feldreihenfolge analog Fault Notification):
+  Titel → Beschreibung → Status/Typ/Priorität → Notiz → Metadaten & Screenshot (lazy) → Änderungsverlauf (lazy).
+- **GLM-Titel:** "🤖 Titel vorschlagen" ruft `/suggest-title` auf, trägt ins Eingabefeld ein (überschreibt nichts in DB, Speichern muss folgen).
+- **Audit:** "📜 Änderungsverlauf" wird beim Aufklappen geladen, gruppiert nach Vorgang (wer+wann).
+
+### Auslesen via curl
+```bash
+curl -H "X-Admin-Key: $ADMIN_KEY" \
+  https://easyreader2.st-schaab.workers.dev/api/admin/bug-reports
+curl -H "X-Admin-Key: $ADMIN_KEY" \
+  https://easyreader2.st-schaab.workers.dev/api/admin/bug-reports/9/history
+```
 
 ---
 
