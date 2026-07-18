@@ -175,6 +175,13 @@ CREATE TABLE IF NOT EXISTS bug_reports (
   description TEXT,                   -- Freitext-Beschreibung (optional)
   screenshot TEXT,                    -- base64-Data-URL (kann NULL sein, wenn zu groß)
   user_agent TEXT,                    -- Browser/OS aus Request-Header
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now')),
+  -- Ticket-Felder (via /api/admin/migrate nachträglich angelegt)
+  type TEXT DEFAULT 'bug',            -- 'bug' | 'feature' | 'improvement'
+  title TEXT,                         -- optionale Kurzüberschrift
+  status TEXT DEFAULT 'open',         -- 'open' | 'in_progress' | 'on_hold' | 'closed' | 'rejected'
+  priority TEXT DEFAULT 'medium',     -- 'low' | 'medium' | 'high'
+  note TEXT,                          -- Bearbeitungs-Notiz (vom Admin)
+  updated_at TEXT                     -- letzte Änderung an status/type/priority/title/note
 );
 CREATE INDEX IF NOT EXISTS idx_bug_reports_created ON bug_reports(created_at DESC);

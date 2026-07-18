@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>EasyReader2 · Tickets</title>
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <style>
+    :root {
+      --bg: #0f1115;
+      --card: #171a21;
+      --card-2: #1c212b;
+      --text: #e8e8ea;
+      --muted: #9aa0aa;
+      --muted-2: #6b717b;
+      --accent: #4f8cff;
+      --accent-soft: rgba(79, 140, 255, 0.15);
+      --border: #262b35;
+      --ok: #2ecc71;
+      --warn: #f0a93b;
+      --err: #e57373;
+      /* Typ-Farben */
+      --type-bug: #e5534b;
+      --type-feature: #4f8cff;
+      --type-improvement: #2ecc71;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Microsoft YaHei", "Noto Sans", sans-serif;
+      line-height: 1.5; font-size: 15px;
+    }
+    .app { max-width: 1100px; margin: 0 auto; padding: 1rem 1.1rem 4rem; }
+
+    /* Login-Schranke */
+    .login-wrap {
+      max-width: 380px; margin: 4rem auto; padding: 1.6rem;
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    }
+    .login-wrap h1 { margin: 0 0 0.3rem; font-size: 1.3rem; }
+    .login-wrap .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.2rem; }
+    .login-wrap input {
+      width: 100%; padding: 0.6rem 0.7rem; background: var(--card-2);
+      border: 1px solid var(--border); border-radius: 8px; color: var(--text);
+      font-family: inherit; font-size: 0.95rem; margin-bottom: 0.8rem;
+    }
+    .login-wrap input:focus { outline: none; border-color: var(--accent); }
+    .login-wrap button {
+      width: 100%; padding: 0.6rem; border: 1px solid var(--accent);
+      background: var(--accent-soft); color: var(--accent); border-radius: 8px;
+      font-family: inherit; font-size: 0.95rem; cursor: pointer; font-weight: 600;
+    }
+    .login-wrap button:hover { background: var(--accent); color: var(--bg); }
+    .login-wrap .hint { color: var(--muted-2); font-size: 0.75rem; margin-top: 1rem; line-height: 1.4; }
+
+    /* Kopfzeile */
+    header.topbar {
+      display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+      padding: 1rem 0 0.8rem; border-bottom: 1px solid var(--border); margin-bottom: 1rem;
+    }
+    header.topbar h1 { margin: 0; font-size: 1.15rem; flex: 1; min-width: 0; }
+    .topbar-btn {
+      background: var(--card); border: 1px solid var(--border); color: var(--muted);
+      border-radius: 8px; padding: 0.35rem 0.7rem; font-family: inherit;
+      font-size: 0.85rem; cursor: pointer;
+    }
+    .topbar-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .topbar-btn.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+
+    /* Filterleiste */
+    .filters {
+      display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 1rem;
+      align-items: center;
+    }
+    .filters select, .filters input {
+      background: var(--card-2); border: 1px solid var(--border); color: var(--text);
+      border-radius: 8px; padding: 0.4rem 0.6rem; font-family: inherit; font-size: 0.85rem;
+    }
+    .filters select:focus, .filters input:focus { outline: none; border-color: var(--accent); }
+    .filters .count { color: var(--muted-2); font-size: 0.78rem; margin-left: auto; }
+
+    /* Status-Badges */
+    .badge {
+      display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px;
+      font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+    }
+    .badge.s-open         { background: rgba(79,140,255,0.15); color: var(--accent); }
+    .badge.s-in_progress  { background: rgba(240,169,59,0.15); color: var(--warn); }
+    .badge.s-on_hold      { background: rgba(154,160,170,0.15); color: var(--muted); }
+    .badge.s-closed       { background: rgba(46,204,113,0.15); color: var(--ok); }
+    .badge.s-rejected     { background: rgba(229,115,115,0.15); color: var(--err); }
+
+    .type-dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%; margin-right: 0.3rem; vertical-align: middle; }
+    .type-dot.t-bug         { background: var(--type-bug); }
+    .type-dot.t-feature     { background: var(--type-feature); }
+    .type-dot.t-improvement { background: var(--type-improvement); }
+
+    /* Listen-View (Tabelle) */
+    .ticket-list { width: 100%; border-collapse: collapse; }
+    .ticket-list th {
+      text-align: left; padding: 0.5rem 0.6rem; font-size: 0.72rem;
+      color: var(--muted-2); text-transform: uppercase; letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--border);
+    }
+    .ticket-list td {
+      padding: 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top;
+      font-size: 0.88rem;
+    }
+    .ticket-list tr { cursor: pointer; }
+    .ticket-list tr:hover td { background: var(--card); }
+    .ticket-list .t-id { color: var(--muted-2); font-weight: 600; width: 3rem; }
+    .ticket-list .t-desc { max-width: 380px; }
+    .ticket-list .t-desc .title { color: var(--text); display: block; }
+    .ticket-list .t-desc .prev { color: var(--muted); font-size: 0.8rem;
+      display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ticket-list .t-status { width: 8rem; }
+    .ticket-list .t-date { color: var(--muted-2); font-size: 0.78rem; width: 9rem; }
+
+    .empty { color: var(--muted); text-align: center; padding: 3rem 1rem; }
+    .err-msg { color: var(--err); padding: 1rem; background: rgba(229,115,115,0.08);
+      border-radius: 8px; margin: 1rem 0; font-size: 0.85rem; }
+
+    /* Detail-Drawer */
+    .drawer-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 50;
+      display: none;
+    }
+    .drawer-overlay.open { display: block; }
+    .drawer {
+      position: fixed; top: 0; right: 0; bottom: 0; width: min(520px, 100vw);
+      background: var(--card); z-index: 51; overflow-y: auto;
+      box-shadow: -8px 0 32px rgba(0,0,0,0.4); transform: translateX(100%);
+      transition: transform 0.2s; display: flex; flex-direction: column;
+    }
+    .drawer.open { transform: translateX(0); }
+    .drawer-head {
+      display: flex; align-items: center; gap: 0.6rem; padding: 1rem 1.2rem;
+      border-bottom: 1px solid var(--border); position: sticky; top: 0;
+      background: var(--card); z-index: 1;
+    }
+    .drawer-head .num { color: var(--muted-2); font-weight: 700; }
+    .drawer-head .close {
+      margin-left: auto; background: transparent; border: none; color: var(--muted);
+      font-size: 1.3rem; cursor: pointer; padding: 0 0.3rem;
+    }
+    .drawer-head .close:hover { color: var(--accent); }
+    .drawer-body { padding: 1.2rem; flex: 1; }
+    .drawer-body .field { margin-bottom: 1rem; }
+    .drawer-body label {
+      display: block; font-size: 0.72rem; color: var(--muted-2);
+      text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.3rem;
+    }
+    .drawer-body input, .drawer-body select, .drawer-body textarea {
+      width: 100%; background: var(--card-2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 0.5rem 0.6rem; color: var(--text);
+      font-family: inherit; font-size: 0.9rem;
+    }
+    .drawer-body textarea { min-height: 80px; resize: vertical; line-height: 1.4; }
+    .drawer-body input:focus, .drawer-body select:focus, .drawer-body textarea:focus {
+      outline: none; border-color: var(--accent);
+    }
+    .drawer-body .meta-row {
+      color: var(--muted-2); font-size: 0.75rem; margin-bottom: 0.8rem; line-height: 1.5;
+    }
+    .drawer-body .screenshot {
+      max-width: 100%; border: 1px solid var(--border); border-radius: 8px;
+      display: block; margin-bottom: 0.4rem;
+    }
+    .drawer-foot {
+      padding: 1rem 1.2rem; border-top: 1px solid var(--border); display: flex;
+      gap: 0.5rem; position: sticky; bottom: 0; background: var(--card);
+    }
+    .drawer-foot button {
+      flex: 1; padding: 0.55rem; border-radius: 8px; font-family: inherit;
+      font-size: 0.88rem; cursor: pointer; border: 1px solid var(--border);
+      background: var(--card-2); color: var(--text);
+    }
+    .drawer-foot .save { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .drawer-foot .save:hover { background: var(--accent); color: var(--bg); }
+    .drawer-foot .del { color: var(--err); }
+    .drawer-foot .del:hover { background: rgba(229,115,115,0.1); border-color: var(--err); }
+    .drawer-status { padding: 0.8rem 1.2rem; font-size: 0.8rem; min-height: 1.2rem; color: var(--muted); }
+    .drawer-status.ok { color: var(--ok); }
+    .drawer-status.err { color: var(--err); }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Login -->
+    <div id="login-view" class="login-wrap">
+      <h1>🔐 EasyReader2 · Tickets</h1>
+      <div class="sub">Admin-Key eingeben, um Tickets zu sehen und zu bearbeiten.</div>
+      <input type="password" id="key-input" placeholder="Admin-Key" autocomplete="off" />
+      <button id="login-btn">Anmelden</button>
+      <div class="hint">Der Key wird nur in diesem Browser-Tab gespeichert (sessionStorage) und beim Schließen des Tabs vergessen.</div>
+    </div>
+
+    <!-- Hauptansicht -->
+    <div id="main-view" style="display:none">
+      <header class="topbar">
+        <h1>📋 EasyReader2 · Tickets</h1>
+        <button class="topbar-btn" id="reload-btn" title="Neu laden">↻</button>
+        <button class="topbar-btn" id="logout-btn" title="Abmelden">Logout</button>
+      </header>
+
+      <div class="filters">
+        <select id="filter-status">
+          <option value="">alle Status</option>
+          <option value="open">open</option>
+          <option value="in_progress">in_progress</option>
+          <option value="on_hold">on_hold</option>
+          <option value="closed">closed</option>
+          <option value="rejected">rejected</option>
+        </select>
+        <select id="filter-type">
+          <option value="">alle Typen</option>
+          <option value="bug">bug</option>
+          <option value="feature">feature</option>
+          <option value="improvement">improvement</option>
+        </select>
+        <input type="search" id="filter-search" placeholder="suchen (titel/beschr/notiz)…" style="flex:1; min-width:180px" />
+        <span class="count" id="count"></span>
+      </div>
+
+      <div id="err-box"></div>
+
+      <div id="list-container">
+        <div class="empty">Lade Tickets…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail-Drawer -->
+  <div class="drawer-overlay" id="drawer-overlay"></div>
+  <div class="drawer" id="drawer">
+    <div class="drawer-head">
+      <span class="num" id="d-num">#</span>
+      <span id="d-badges"></span>
+      <button class="close" id="d-close" title="Schließen">✕</button>
+    </div>
+    <div class="drawer-body" id="drawer-body"></div>
+    <div class="drawer-status" id="d-status"></div>
+    <div class="drawer-foot">
+      <button class="del" id="d-delete">🗑 Löschen</button>
+      <button class="save" id="d-save">💾 Speichern</button>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      "use strict";
+      const API = "https://easyreader2.st-schaab.workers.dev";
+      const ADMIN_KEY_STORAGE = "er2_admin_key_session";
+
+      // --- State ---
+      let adminKey = sessionStorage.getItem(ADMIN_KEY_STORAGE) || "";
+      let allTickets = [];        // ungefiltert
+      let currentTicket = null;   // im Drawer geöffnet (volle Daten mit screenshot)
+
+      // --- DOM ---
+      const loginView = document.getElementById("login-view");
+      const mainView = document.getElementById("main-view");
+      const keyInput = document.getElementById("key-input");
+      const loginBtn = document.getElementById("login-btn");
+      const reloadBtn = document.getElementById("reload-btn");
+      const logoutBtn = document.getElementById("logout-btn");
+      const listContainer = document.getElementById("list-container");
+      const errBox = document.getElementById("err-box");
+      const countEl = document.getElementById("count");
+      const fStatus = document.getElementById("filter-status");
+      const fType = document.getElementById("filter-type");
+      const fSearch = document.getElementById("filter-search");
+
+      const drawer = document.getElementById("drawer");
+      const drawerOverlay = document.getElementById("drawer-overlay");
+      const drawerBody = document.getElementById("drawer-body");
+      const dNum = document.getElementById("d-num");
+      const dBadges = document.getElementById("d-badges");
+      const dStatus = document.getElementById("d-status");
+      const dClose = document.getElementById("d-close");
+      const dSave = document.getElementById("d-save");
+      const dDelete = document.getElementById("d-delete");
+
+      // --- Helpers ---
+      function escapeHtml(s) {
+        if (s == null) return "";
+        return String(s).replace(/[&<>"']/g, function (c) {
+          return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+        });
+      }
+      function apiFetch(path, options) {
+        options = options || {};
+        options.headers = Object.assign({ "X-Admin-Key": adminKey }, options.headers || {});
+        return fetch(API + path, options);
+      }
+      function statusLabel(s) {
+        return ({ open: "Open", in_progress: "In Progress", on_hold: "On Hold",
+          closed: "Closed", rejected: "Rejected" })[s] || s;
+      }
+      function typeLabel(t) {
+        return ({ bug: "Bug", feature: "Feature", improvement: "Improvement" })[t] || t;
+      }
+      function shortDate(s) {
+        if (!s) return "—";
+        return s.replace("T", " ").slice(0, 16);
+      }
+
+      // --- Login ---
+      function showLogin() {
+        loginView.style.display = "block";
+        mainView.style.display = "none";
+        keyInput.value = adminKey || "";
+        keyInput.focus();
+      }
+      function showMain() {
+        loginView.style.display = "none";
+        mainView.style.display = "block";
+        loadTickets();
+      }
+      function doLogin() {
+        adminKey = keyInput.value.trim();
+        if (!adminKey) return;
+        sessionStorage.setItem(ADMIN_KEY_STORAGE, adminKey);
+        showMain();
+      }
+      function doLogout() {
+        adminKey = "";
+        sessionStorage.removeItem(ADMIN_KEY_STORAGE);
+        allTickets = [];
+        showLogin();
+      }
+      loginBtn.addEventListener("click", doLogin);
+      keyInput.addEventListener("keydown", function (e) { if (e.key === "Enter") doLogin(); });
+      logoutBtn.addEventListener("click", doLogout);
+      reloadBtn.addEventListener("click", loadTickets);
+
+      // --- Ticket-Liste ---
+      async function loadTickets() {
+        listContainer.innerHTML = '<div class="empty">Lade Tickets…</div>';
+        errBox.innerHTML = "";
+        try {
+          const res = await apiFetch("/api/admin/bug-reports");
+          if (res.status === 401) { errBox.innerHTML = '<div class="err-msg">Admin-Key ungültig.</div>'; doLogout(); return; }
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const data = await res.json();
+          allTickets = data.reports || [];
+          renderList();
+        } catch (e) {
+          errBox.innerHTML = '<div class="err-msg">Laden fehlgeschlagen: ' + escapeHtml(e.message) + '</div>';
+          listContainer.innerHTML = '<div class="empty">Fehler.</div>';
+        }
+      }
+
+      function renderList() {
+        const st = fStatus.value, ty = fType.value, q = fSearch.value.trim().toLowerCase();
+        const filtered = allTickets.filter(function (t) {
+          if (st && t.status !== st) return false;
+          if (ty && t.type !== ty) return false;
+          if (q) {
+            const hay = ((t.title || "") + " " + (t.description || "") + " " + (t.note || "")).toLowerCase();
+            if (hay.indexOf(q) < 0) return false;
+          }
+          return true;
+        });
+        countEl.textContent = filtered.length + " / " + allTickets.length;
+
+        if (filtered.length === 0) {
+          listContainer.innerHTML = '<div class="empty">Keine Tickets.</div>';
+          return;
+        }
+        let rows = "";
+        for (const t of filtered) {
+          const title = t.title || (t.description || "").slice(0, 80) || "(keine Beschreibung)";
+          const prev = t.description ? t.description.slice(0, 80) : "";
+          rows +=
+            '<tr data-id="' + t.id + '">' +
+              '<td class="t-id">#' + t.id + '</td>' +
+              '<td class="t-type"><span class="type-dot t-' + (t.type || "bug") + '"></span>' + escapeHtml(typeLabel(t.type)) + '</td>' +
+              '<td class="t-desc"><span class="title">' + escapeHtml(title) + '</span>' +
+                (prev && prev !== title ? '<span class="prev">' + escapeHtml(prev) + '</span>' : '') + '</td>' +
+              '<td class="t-status"><span class="badge s-' + (t.status || "open") + '">' + escapeHtml(statusLabel(t.status)) + '</span></td>' +
+              '<td class="t-date">' + escapeHtml(shortDate(t.created_at)) + '</td>' +
+            '</tr>';
+        }
+        listContainer.innerHTML =
+          '<table class="ticket-list"><thead><tr>' +
+            '<th>#</th><th>Typ</th><th>Titel / Beschreibung</th><th>Status</th><th>Erstellt</th>' +
+          '</tr></thead><tbody>' + rows + '</tbody></table>';
+
+        // Zeilen-Klick -> Detail öffnen
+        listContainer.querySelectorAll("tr[data-id]").forEach(function (tr) {
+          tr.addEventListener("click", function () { openDrawer(parseInt(tr.dataset.id, 10)); });
+        });
+      }
+
+      fStatus.addEventListener("change", renderList);
+      fType.addEventListener("change", renderList);
+      fSearch.addEventListener("input", renderList);
+
+      // --- Detail-Drawer ---
+      function closeDrawer() {
+        drawer.classList.remove("open");
+        drawerOverlay.classList.remove("open");
+        currentTicket = null;
+      }
+      dClose.addEventListener("click", closeDrawer);
+      drawerOverlay.addEventListener("click", closeDrawer);
+
+      async function openDrawer(id) {
+        dStatus.textContent = "Lade Details…";
+        dStatus.className = "drawer-status";
+        drawerBody.innerHTML = "";
+        dNum.textContent = "#" + id;
+        dBadges.innerHTML = "";
+        drawer.classList.add("open");
+        drawerOverlay.classList.add("open");
+        try {
+          const res = await apiFetch("/api/admin/bug-reports/" + id);
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const data = await res.json();
+          currentTicket = data.report;
+          renderDrawer();
+          dStatus.textContent = "";
+        } catch (e) {
+          dStatus.textContent = "Fehler: " + e.message;
+          dStatus.className = "drawer-status err";
+        }
+      }
+
+      function renderDrawer() {
+        const t = currentTicket;
+        if (!t) return;
+        dBadges.innerHTML =
+          '<span class="badge s-' + (t.status || "open") + '">' + escapeHtml(statusLabel(t.status)) + '</span>';
+
+        const shotHtml = t.screenshot
+          ? '<div class="field"><label>Screenshot</label>' +
+            '<img class="screenshot" src="' + t.screenshot + '" alt="Screenshot" /></div>'
+          : '<div class="meta-row">kein Screenshot</div>';
+
+        drawerBody.innerHTML =
+          '<div class="meta-row">' +
+            'User: <strong>' + escapeHtml(t.user_id) + '</strong> · v' + escapeHtml(t.version || "?") +
+            (t.book_id ? ' · Buch #' + t.book_id : '') +
+            (t.level ? ' · Level ' + escapeHtml(t.level) : '') + '<br>' +
+            'Erstellt: ' + escapeHtml(shortDate(t.created_at)) +
+            (t.updated_at ? ' · Aktualisiert: ' + escapeHtml(shortDate(t.updated_at)) : '') + '<br>' +
+            '<code style="font-size:0.72rem;color:var(--muted-2)">' + escapeHtml((t.user_agent || "").slice(0, 100)) + '</code>' +
+          '</div>' +
+          shotHtml +
+          '<div class="field"><label for="d-title">Titel</label>' +
+            '<input type="text" id="d-title" value="' + escapeHtml(t.title || "") + '" placeholder="(optional, aus Beschreibung abgeleitet)" /></div>' +
+          '<div class="field"><label for="d-type">Typ</label>' +
+            '<select id="d-type">' +
+              ['bug','feature','improvement'].map(function (x) {
+                return '<option value="' + x + '"' + (t.type === x ? ' selected' : '') + '>' + typeLabel(x) + '</option>';
+              }).join('') +
+            '</select></div>' +
+          '<div class="field"><label for="d-prio">Priorität</label>' +
+            '<select id="d-prio">' +
+              ['low','medium','high'].map(function (x) {
+                return '<option value="' + x + '"' + (t.priority === x ? ' selected' : '') + '>' + x + '</option>';
+              }).join('') +
+            '</select></div>' +
+          '<div class="field"><label for="d-status-select">Status</label>' +
+            '<select id="d-status-select">' +
+              ['open','in_progress','on_hold','closed','rejected'].map(function (x) {
+                return '<option value="' + x + '"' + (t.status === x ? ' selected' : '') + '>' + statusLabel(x) + '</option>';
+              }).join('') +
+            '</select></div>' +
+          '<div class="field"><label for="d-note">Bearbeitungs-Notiz</label>' +
+            '<textarea id="d-note" placeholder="Was wurde gemacht? Was ist noch offen?">' + escapeHtml(t.note || "") + '</textarea></div>' +
+          '<div class="field"><label>Beschreibung (vom Melder)</label>' +
+            '<div style="color:var(--muted);font-size:0.88rem;white-space:pre-wrap;background:var(--card-2);padding:0.6rem;border-radius:8px;border:1px solid var(--border)">' + escapeHtml(t.description || "(keine)") + '</div></div>';
+      }
+
+      dSave.addEventListener("click", async function () {
+        if (!currentTicket) return;
+        const payload = {
+          title: document.getElementById("d-title").value,
+          type: document.getElementById("d-type").value,
+          priority: document.getElementById("d-prio").value,
+          status: document.getElementById("d-status-select").value,
+          note: document.getElementById("d-note").value,
+        };
+        dStatus.textContent = "Speichere…";
+        dStatus.className = "drawer-status";
+        try {
+          const res = await apiFetch("/api/admin/bug-reports/" + currentTicket.id, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const data = await res.json();
+          if (!data.ok) throw new Error(JSON.stringify(data));
+          dStatus.textContent = "✓ Gespeichert";
+          dStatus.className = "drawer-status ok";
+          // Local copy + Liste aktualisieren
+          Object.assign(currentTicket, payload, { updated_at: new Date().toISOString().slice(0,19).replace("T"," ") });
+          Object.assign(allTickets.find(function (x) { return x.id === currentTicket.id; }) || {}, payload);
+          renderList();
+          setTimeout(function () { if (currentTicket) { dStatus.textContent = ""; } }, 2000);
+        } catch (e) {
+          dStatus.textContent = "✗ Speichern fehlgeschlagen: " + e.message;
+          dStatus.className = "drawer-status err";
+        }
+      });
+
+      dDelete.addEventListener("click", async function () {
+        if (!currentTicket) return;
+        if (!confirm("Ticket #" + currentTicket.id + " wirklich löschen? unwiderruflich.")) return;
+        dStatus.textContent = "Lösche…";
+        try {
+          const res = await apiFetch("/api/admin/bug-reports/" + currentTicket.id, { method: "DELETE" });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          allTickets = allTickets.filter(function (x) { return x.id !== currentTicket.id; });
+          renderList();
+          closeDrawer();
+        } catch (e) {
+          dStatus.textContent = "✗ Löschen fehlgeschlagen: " + e.message;
+          dStatus.className = "drawer-status err";
+        }
+      });
+
+      // --- Start ---
+      if (adminKey) showMain(); else showLogin();
+    })();
+  </script>
+</body>
+</html>

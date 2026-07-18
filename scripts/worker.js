@@ -8,14 +8,17 @@
 //   GET  /api/progress/:bookId    – Lesefortschritt laden
 //   POST /api/bug-report          – Bug-Report mit optionalem Screenshot speichern
 //   POST /api/synonym             – Synonym+Rang+EN für ein spanisches Wort (GLM, live)
-//   GET  /api/admin/bug-reports   – Bug-Report-Liste (X-Admin-Key geschützt)
-//   GET  /api/admin/bug-reports/:id – Einzelner Bug-Report mit Screenshot
+//   GET  /api/admin/bug-reports   – Ticket-Liste (X-Admin-Key geschützt)
+//   GET  /api/admin/bug-reports/:id – Einzelnes Ticket mit Screenshot
+//   PATCH /api/admin/bug-reports/:id – Ticket aktualisieren (status/type/...)
+//   DELETE /api/admin/bug-reports/:id – Ticket löschen
+//   POST /api/admin/migrate       – Schema-Migration (ALTER TABLE, idempotent)
 //   POST /api/admin/words         – Kelly-Wortlisten-Import (X-Admin-Key geschützt)
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, X-User-Id",
+  "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, X-User-Id, X-Admin-Key",
   "Content-Type": "application/json",
 };
 
@@ -532,14 +535,59 @@ export default {
         });
       }
 
-      // ─── Admin: Bug-Report-Liste (letzte 50, ohne Screenshots) ───
+      // ─── Admin: Schema-Migration (idempotent, ALTER TABLE) ───
+      // Fügt die Ticket-Spalten zur bug_reports-Tabelle hinzu, falls sie noch
+      // fehlen. CREATE TABLE IF NOT EXISTS ist bei bestehender Tabelle ein
+      // No-Op, daher der separate Migrations-Pfad. SQLite ADD COLUMN schlägt
+      // fehl, wenn die Spalte schon existiert -> pro Spalte try/catch.
+      if (path === "/api/admin/migrate" && request.method === "POST") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const cols = [
+          { name: "type",       ddl: "TEXT DEFAULT 'bug'" },
+          { name: "title",      ddl: "TEXT" },
+          { name: "status",     ddl: "TEXT DEFAULT 'open'" },
+          { name: "priority",   ddl: "TEXT DEFAULT 'medium'" },
+          { name: "note",       ddl: "TEXT" },
+          { name: "updated_at", ddl: "TEXT" },
+        ];
+        const results = [];
+        for (const c of cols) {
+          try {
+            await env.DB.prepare(
+              `ALTER TABLE bug_reports ADD COLUMN ${c.name} ${c.ddl}`
+            ).run();
+            results.push({ col: c.name, added: true });
+          } catch (e) {
+            // Spalte existiert bereits -> OK, nichts tun.
+            results.push({ col: c.name, added: false, reason: e.message });
+          }
+        }
+        // Backfill: bestehende Reports ohne status/type/priority mit Defaults füllen
+        try {
+          await env.DB.prepare(
+            `UPDATE bug_reports SET status='open' WHERE status IS NULL`
+          ).run();
+          await env.DB.prepare(
+            `UPDATE bug_reports SET type='bug' WHERE type IS NULL`
+          ).run();
+          await env.DB.prepare(
+            `UPDATE bug_reports SET priority='medium' WHERE priority IS NULL`
+          ).run();
+        } catch (e) { /* Tabelle evtl. noch nicht da -> ignorieren */ }
+        return json({ ok: true, columns: results });
+      }
+
+      // ─── Admin: Ticket-Liste (ohne Screenshots, dafür mit Status/Typ/etc.) ───
       if (path === "/api/admin/bug-reports" && request.method === "GET") {
         const adminKey = request.headers.get("X-Admin-Key");
         if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
         const r = await env.DB.prepare(
-          `SELECT id, user_id, version, book_id, chunk_index, level, description, user_agent, created_at,
+          `SELECT id, user_id, version, book_id, chunk_index, level,
+                  description, user_agent, created_at, updated_at,
+                  type, title, status, priority, note,
                   (screenshot IS NOT NULL) AS has_screenshot
-           FROM bug_reports ORDER BY created_at DESC LIMIT 50`
+           FROM bug_reports ORDER BY created_at DESC LIMIT 100`
         ).all();
         return json({ reports: r.results });
       }
@@ -556,6 +604,53 @@ export default {
         ).bind(reportId).first();
         if (!row) return json({ error: "nicht gefunden" }, 404);
         return json({ report: row });
+      }
+
+      // ─── Admin: Bug-Report löschen ───
+      const bugDeleteMatch = path.match(/^\/api\/admin\/bug-reports\/(\d+)$/);
+      if (bugDeleteMatch && request.method === "DELETE") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const reportId = parseInt(bugDeleteMatch[1], 10);
+        const r = await env.DB.prepare(
+          `DELETE FROM bug_reports WHERE id = ?`
+        ).bind(reportId).run();
+        return json({ ok: true, deleted: r.meta?.changes || 0 });
+      }
+
+      // ─── Admin: Ticket aktualisieren (status/type/priority/title/note) ───
+      // PATCH mit beliebigem Subset der Felder. Whitelist schützt vor Injection
+      // (Feldnamen werden in SQL eingefügt, daher dürfen nur bekannte durch).
+      const bugPatchMatch = path.match(/^\/api\/admin\/bug-reports\/(\d+)$/);
+      if (bugPatchMatch && request.method === "PATCH") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const reportId = parseInt(bugPatchMatch[1], 10);
+        const body = await request.json();
+        // Erlaubte Felder + Wert-Bereinigung (Längenlimits, Typ).
+        const allowed = {
+          status:   (v) => ["open", "in_progress", "on_hold", "closed", "rejected"].includes(v) ? v : null,
+          type:     (v) => ["bug", "feature", "improvement"].includes(v) ? v : null,
+          priority: (v) => ["low", "medium", "high"].includes(v) ? v : null,
+          title:    (v) => typeof v === "string" ? v.slice(0, 200) : null,
+          note:     (v) => typeof v === "string" ? v.slice(0, 4000) : null,
+        };
+        const sets = [];
+        const vals = [];
+        for (const [field, validate] of Object.entries(allowed)) {
+          if (body[field] !== undefined) {
+            const cleaned = validate(body[field]);
+            if (cleaned !== null) { sets.push(`${field} = ?`); vals.push(cleaned); }
+          }
+        }
+        if (sets.length === 0) return json({ error: "keine gültigen Felder" }, 400);
+        sets.push(`updated_at = datetime('now')`);
+        vals.push(reportId);
+        const r = await env.DB.prepare(
+          `UPDATE bug_reports SET ${sets.join(", ")} WHERE id = ?`
+        ).bind(...vals).run();
+        if ((r.meta?.changes || 0) === 0) return json({ error: "nicht gefunden" }, 404);
+        return json({ ok: true, updated: r.meta?.changes || 0 });
       }
 
       // ─── Lesefortschritt speichern ───
