@@ -410,24 +410,41 @@
       dClose.addEventListener("click", closeDrawer);
       drawerOverlay.addEventListener("click", closeDrawer);
 
-      async function openDrawer(id) {
-        dStatus.textContent = "Lade Details…";
+      function openDrawer(id) {
+        // Ticket aus den bereits geladenen Listendaten nehmen — KEIN extra
+        // API-Aufruf (der Detail-Endpoint liefert den großen base64-Screenshot
+        // mit, was bei schlechtem Netz zu "Failed to fetch" führte).
+        const ticket = allTickets.find(function (t) { return t.id === id; });
+        if (!ticket) { dStatus.textContent = "Ticket #" + id + " nicht in Liste."; dStatus.className = "drawer-status err"; return; }
+        currentTicket = ticket;  // hat description/note/status/type/etc., aber KEIN screenshot
+        dStatus.textContent = "";
         dStatus.className = "drawer-status";
         drawerBody.innerHTML = "";
         dNum.textContent = "#" + id;
         dBadges.innerHTML = "";
         drawer.classList.add("open");
         drawerOverlay.classList.add("open");
+        renderDrawer();
+      }
+
+      // Screenshot on-demand laden (lazy): der einzige Grund, den großen
+      // base64-Payload zu holen. Trennt schnelle Feld-Bearbeitung vom Bild.
+      async function loadScreenshot(id) {
+        const holder = document.getElementById("d-shot-holder");
+        if (!holder) return;
+        holder.innerHTML = '<div class="meta-row">Lade Screenshot …</div>';
         try {
           const res = await apiFetch("/api/admin/bug-reports/" + id);
           if (!res.ok) throw new Error("HTTP " + res.status);
           const data = await res.json();
-          currentTicket = data.report;
-          renderDrawer();
-          dStatus.textContent = "";
+          const shot = data.report && data.report.screenshot;
+          if (shot) {
+            holder.innerHTML = '<img class="screenshot" src="' + shot + '" alt="Screenshot" />';
+          } else {
+            holder.innerHTML = '<div class="meta-row">kein Screenshot gespeichert</div>';
+          }
         } catch (e) {
-          dStatus.textContent = "Fehler: " + e.message;
-          dStatus.className = "drawer-status err";
+          holder.innerHTML = '<div class="meta-row" style="color:var(--err)">Screenshot-Laden fehlgeschlagen: ' + escapeHtml(e.message) + '</div>';
         }
       }
 
@@ -437,9 +454,10 @@
         dBadges.innerHTML =
           '<span class="badge s-' + (t.status || "open") + '">' + escapeHtml(statusLabel(t.status)) + '</span>';
 
-        const shotHtml = t.screenshot
+        // Screenshot: nur ein Button zum Nachladen (base64 ist gross).
+        const shotHtml = t.has_screenshot
           ? '<div class="field"><label>Screenshot</label>' +
-            '<img class="screenshot" src="' + t.screenshot + '" alt="Screenshot" /></div>'
+            '<div id="d-shot-holder"><button class="topbar-btn" id="d-load-shot">📸 Screenshot laden</button></div></div>'
           : '<div class="meta-row">kein Screenshot</div>';
 
         drawerBody.innerHTML =
@@ -476,6 +494,10 @@
             '<textarea id="d-note" placeholder="Was wurde gemacht? Was ist noch offen?">' + escapeHtml(t.note || "") + '</textarea></div>' +
           '<div class="field"><label>Beschreibung (vom Melder)</label>' +
             '<div style="color:var(--muted);font-size:0.88rem;white-space:pre-wrap;background:var(--card-2);padding:0.6rem;border-radius:8px;border:1px solid var(--border)">' + escapeHtml(t.description || "(keine)") + '</div></div>';
+
+        // Screenshot-Load-Button verdrahten (falls vorhanden)
+        const loadBtn = document.getElementById("d-load-shot");
+        if (loadBtn) loadBtn.addEventListener("click", function () { loadScreenshot(t.id); });
       }
 
       dSave.addEventListener("click", async function () {
