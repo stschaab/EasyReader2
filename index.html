@@ -633,7 +633,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.22";
+      const VERSION = "7.23";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -2205,34 +2205,30 @@
         rec.lang = bugCurrentLang().bcp47;
         rec.interimResults = true;
         rec.continuous = true;
-        // Textverwaltung: baseText = alles final Erkannte (bleibt).
-        //   interim = aktuell gesprochen, noch nicht final (wird jedes Event
-        //   neu überschrieben). lastProcessedIdx verhindert, dass ein final
-        //   Ergebnis mehrfach appended wird (klassischer SpeechRecognition-Bug:
-        //   finale Resultate bleiben im event.results-Array und werden sonst
-        //   bei jedem folgenden Event erneut angehängt → Wiederholungen).
+        // Textverwaltung:
+        //   baseText = alles bisher FINAL Erkannte (bleibt dauerhaft).
+        //   Pro Event: alle neuen finalen Resultate appenden (genau einmal,
+        //   verfolgt via appendedFinal = Anzahl bereits verarbeiteter Finals).
+        //   Interim: NUR das letzte nicht-finale Resultat anzeigen (das ist
+        //   das aktuell Gesprochene). Frühere Versuche sammelten alle Interim-
+        //   Resultate -> bei continuous:true liegen oft mehrere überlappende
+        //   Interim-Resultate im Array -> "das ist noch mal das ist noch mal".
         let baseText = bugDesc.value;
-        let lastProcessedIdx = 0;
-        rec.onstart = function () {
-          // Beim Start Index auf aktuelle Länge setzen, damit nur neue
-          // Ergebnisse verarbeitet werden.
-          lastProcessedIdx = 0;
-          baseText = bugDesc.value;
-        };
+        let appendedFinal = 0;  // wie viele finale Resultate schon appended
         rec.onresult = function (event) {
           let interim = "";
-          // Nur NEUE Ergebnisse seit dem letzten Event verarbeiten.
-          for (let i = event.resultIndex; i < event.results.length; i++) {
+          for (let i = 0; i < event.results.length; i++) {
             const r = event.results[i];
             if (r.isFinal) {
-              baseText = (baseText + " " + r[0].transcript).replace(/\s+/g, " ").trim();
-              lastProcessedIdx = i + 1;
+              if (i >= appendedFinal) {
+                baseText = (baseText + " " + r[0].transcript).replace(/\s+/g, " ").trim();
+                appendedFinal = i + 1;
+              }
+            } else {
+              // Nur das letzte nicht-finale Resultat übernehmen (aktuellster
+              // Stand des Gesprochenen). Ältere Interim-Resultate ignorieren.
+              interim = r[0].transcript;
             }
-          }
-          // Aktuelle Interim-Ergebnisse (nur die noch nicht-finalen am Ende)
-          for (let i = lastProcessedIdx; i < event.results.length; i++) {
-            const r = event.results[i];
-            if (!r.isFinal) interim += r[0].transcript;
           }
           bugDesc.value = (baseText + " " + interim).replace(/\s+/g, " ").trim();
         };
