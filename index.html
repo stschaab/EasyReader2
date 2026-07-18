@@ -633,7 +633,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.23";
+      const VERSION = "7.24";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -2203,34 +2203,28 @@
         // Bedien-Sprache, sonst wird z.B. deutsches Diktat bei einem spanischen
         // Buch als Spanisch interpretiert → Gibberish.
         rec.lang = bugCurrentLang().bcp47;
-        rec.interimResults = true;
+        // ⚠ WICHTIG zu interim/continuous:
+        // Bei Android/Chrome liefert continuous:true + interimResults:true
+        // oft EIN einziges wachsendes Interim-Resultat (jedes Wort kommt dazu,
+        // statt als separates Segment). Kombiniert man das mit baseText, entsteht
+        // eine Wiederholungs-Lawine ("... ein neuer backreport ein neuer backreport
+        // ein neuer backreport den ich hier ..."). Reports #4/#5/#6 zeigen das.
+        // Lösung: interimResults:AUS — wir akzeptieren nur FINALE Segmente.
+        // Die Live-Vorschau entfällt, dafür ist der Text korrekt. Finale
+        // Segmente kommen bei continuous:true etwa alle paar Sekunden.
+        rec.interimResults = false;
         rec.continuous = true;
-        // Textverwaltung:
-        //   baseText = alles bisher FINAL Erkannte (bleibt dauerhaft).
-        //   Pro Event: alle neuen finalen Resultate appenden (genau einmal,
-        //   verfolgt via appendedFinal = Anzahl bereits verarbeiteter Finals).
-        //   Interim: NUR das letzte nicht-finale Resultat anzeigen (das ist
-        //   das aktuell Gesprochene). Frühere Versuche sammelten alle Interim-
-        //   Resultate -> bei continuous:true liegen oft mehrere überlappende
-        //   Interim-Resultate im Array -> "das ist noch mal das ist noch mal".
         let baseText = bugDesc.value;
-        let appendedFinal = 0;  // wie viele finale Resultate schon appended
+        let lastFinalIdx = -1;  // Index des zuletzt verarbeiteten finalen Resultats
         rec.onresult = function (event) {
-          let interim = "";
-          for (let i = 0; i < event.results.length; i++) {
+          for (let i = event.resultIndex; i < event.results.length; i++) {
             const r = event.results[i];
-            if (r.isFinal) {
-              if (i >= appendedFinal) {
-                baseText = (baseText + " " + r[0].transcript).replace(/\s+/g, " ").trim();
-                appendedFinal = i + 1;
-              }
-            } else {
-              // Nur das letzte nicht-finale Resultat übernehmen (aktuellster
-              // Stand des Gesprochenen). Ältere Interim-Resultate ignorieren.
-              interim = r[0].transcript;
+            if (r.isFinal && i > lastFinalIdx) {
+              baseText = (baseText + " " + r[0].transcript).replace(/\s+/g, " ").trim();
+              lastFinalIdx = i;
             }
           }
-          bugDesc.value = (baseText + " " + interim).replace(/\s+/g, " ").trim();
+          bugDesc.value = baseText;
         };
         rec.onerror = function (event) {
           let msg = "Spracheingabe-Fehler";
