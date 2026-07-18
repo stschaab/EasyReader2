@@ -11,6 +11,7 @@
 //   GET  /api/admin/bug-reports   – Ticket-Liste (X-Admin-Key geschützt)
 //   GET  /api/admin/bug-reports/:id – Einzelnes Ticket mit Screenshot
 //   PATCH /api/admin/bug-reports/:id – Ticket aktualisieren (status/type/...)
+//   POST  /api/admin/bug-reports/:id/suggest-title – GLM generiert Titelvorschlag
 //   DELETE /api/admin/bug-reports/:id – Ticket löschen
 //   POST /api/admin/migrate       – Schema-Migration (ALTER TABLE, idempotent)
 //   POST /api/admin/words         – Kelly-Wortlisten-Import (X-Admin-Key geschützt)
@@ -651,6 +652,82 @@ export default {
         ).bind(...vals).run();
         if ((r.meta?.changes || 0) === 0) return json({ error: "nicht gefunden" }, 404);
         return json({ ok: true, updated: r.meta?.changes || 0 });
+      }
+
+      // ─── Admin: GLM-Titel-Vorschlag für ein Ticket ───
+      // Lädt das Ticket (mit allen Feldern), baut einen Prompt und ruft GLM auf.
+      // Gibt einen kurzen, aussagekräftigen Titel zurück (max ~80 Zeichen).
+      // Überschreibt nichts — das Frontend entscheidet, ob es den Titel übernimmt.
+      const bugTitleMatch = path.match(/^\/api\/admin\/bug-reports\/(\d+)\/suggest-title$/);
+      if (bugTitleMatch && request.method === "POST") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const reportId = parseInt(bugTitleMatch[1], 10);
+        const t = await env.DB.prepare(
+          `SELECT id, description, note, type, status, priority, book_id, level, version FROM bug_reports WHERE id = ?`
+        ).bind(reportId).first();
+        if (!t) return json({ error: "nicht gefunden" }, 404);
+
+        const systemPrompt =
+          "You summarize a bug/feature report into a concise German TITLE (Kopfzeile), " +
+          "like a Jira summary or a CMMS fault-notification headline. " +
+          "Rules:\n" +
+          "- Max ~80 characters, ideally 4-8 words.\n" +
+          "- German (the app's UI language). Keep technical terms as-is.\n" +
+          "- State the PROBLEM or REQUEST, not the user's wording. Be specific.\n" +
+          "- Examples: 'Wörterbuch: keine Übersetzung bei Verben', 'SRS-Intervall in Karten anzeigen', 'Lesefortschritt wird nicht wiederhergestellt'.\n" +
+          "- Output ONLY the title text, no quotes, no explanation, no prefix.";
+        const fields = [];
+        if (t.description) fields.push("Beschreibung: " + t.description);
+        if (t.note)       fields.push("Notiz: " + t.note);
+        if (t.type)       fields.push("Typ: " + t.type);
+        if (t.status)     fields.push("Status: " + t.status);
+        if (t.book_id)    fields.push("Buch: #" + t.book_id);
+        if (t.level)      fields.push("Level: " + t.level);
+        if (t.version)    fields.push("App-Version: " + t.version);
+        const userPrompt = "Ticket-Daten:\n" + fields.join("\n") + "\n\nTitel:";
+
+        let title = null;
+        let lastError = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          if (attempt > 0) await new Promise((r) => setTimeout(r, 1200));
+          try {
+            const glmRes = await fetch("https://open.bigmodel.cn/api/anthropic/v1/messages", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-api-key": env.GLM_API_KEY,
+                "anthropic-version": "2023-06-01",
+              },
+              body: JSON.stringify({
+                model: "glm-4.6",
+                max_tokens: 60,
+                system: systemPrompt,
+                messages: [{ role: "user", content: userPrompt }],
+                temperature: 0.3,
+              }),
+            });
+            if (glmRes.ok) {
+              const glmData = await glmRes.json();
+              const candidate = (glmData.content || [])
+                .filter((p) => p.type === "text")
+                .map((p) => p.text)
+                .join("")
+                .trim()
+                .split("\n")[0]              // nur erste Zeile
+                .replace(/^["'\s]+|["'\s]+$/g, "")  // Anführungszeichen drumrum weg
+                .slice(0, 100);
+              if (candidate.length >= 3) { title = candidate; break; }
+              lastError = "leere/kurze Antwort";
+            } else {
+              const errText = await glmRes.text();
+              lastError = errText.slice(0, 120);
+              if (!errText.includes("1302")) break;  // nur bei Rate-Limit retry
+            }
+          } catch (e) { lastError = e.message; }
+        }
+        if (!title) return json({ error: "GLM-Fehler: " + (lastError || "unbekannt") }, 502);
+        return json({ ok: true, title: title });
       }
 
       // ─── Lesefortschritt speichern ───
