@@ -67,6 +67,8 @@
     }
     .topbar-btn:hover { border-color: var(--accent); color: var(--accent); }
     .topbar-btn.active { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+    /* topbar-btn als <a>-Link (Navigation): gleiche Optik wie Button */
+    a.topbar-btn { text-decoration: none; display: inline-flex; align-items: center; gap: 0.2rem; }
 
     /* Filterleiste */
     .filters {
@@ -199,6 +201,7 @@
     <!-- Hauptansicht -->
     <div id="main-view" style="display:none">
       <header class="topbar">
+        <a class="topbar-btn" href="index.html" title="Zur Leser-App">📖 Lesen</a>
         <h1>📋 EasyReader2 · Tickets</h1>
         <button class="topbar-btn" id="reload-btn" title="Neu laden">↻</button>
         <button class="topbar-btn" id="logout-btn" title="Abmelden">Logout</button>
