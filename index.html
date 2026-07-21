@@ -777,10 +777,23 @@
         return true;
       }
       function intervalLabel(hours) {
+        // Regelfall sind Tage; Stunden/Minuten nur bei frischen Karten.
+        // 20h+ runden wir auf "1 Tag" (nah genug, lesbarer als "20 h").
         if (hours < 1) return Math.round(hours * 60) + " min";
-        if (hours < 24) return hours.toFixed(1).replace(/\.0$/, "") + " h";
-        const d = Math.round(hours / 24);
-        return d + " Tag" + (d === 1 ? "" : "e");
+        if (hours < 20) {
+          const h = hours.toFixed(1).replace(/\.0$/, "");
+          return h + " h";
+        }
+        // Tage, ggf. mit Halben (1.5 Tage, 2 Tage, 14 Tage)
+        const d = hours / 24;
+        if (Math.abs(d - Math.round(d)) < 0.05) {
+          // ganzzahlige Tage
+          const di = Math.round(d);
+          return di + " Tag" + (di === 1 ? "" : "e");
+        }
+        // Bruchteile (0.5er-Schritte, sonst gerundet)
+        const dr = (Math.round(d * 2) / 2).toFixed(1).replace(/\.0$/, "");
+        return dr + " Tage";
       }
       let reviewBtnEl = null, dueBadgeEl = null;
       function updateBadge() {
