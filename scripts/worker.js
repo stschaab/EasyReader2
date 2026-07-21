@@ -6,6 +6,9 @@
 //   POST /api/simplify            – RAG-Vereinfachung { chunk_id, level }
 //   POST /api/progress            – Lesefortschritt speichern
 //   GET  /api/progress/:bookId    – Lesefortschritt laden
+//   GET    /api/deck              – Vokabel-Deck laden (anonym via X-User-Id)
+//   POST   /api/deck/card         – einzelne Lernkarte upsert (create/update/grade)
+//   DELETE /api/deck/card/:lemma  – einzelne Lernkarte löschen
 //   POST /api/bug-report          – Bug-Report mit optionalem Screenshot speichern
 //   POST /api/synonym             – Synonym+Rang+EN für ein spanisches Wort (GLM, live)
 //   GET  /api/admin/bug-reports   – Ticket-Liste (X-Admin-Key geschützt)
@@ -846,6 +849,90 @@ export default {
           `SELECT chunk_index, level FROM progress WHERE user_id = ? AND book_id = ?`
         ).bind(userId, bookId).first();
         return json({ progress: p || { chunk_index: 0, level: "original" } });
+      }
+
+      // ─── Vokabel-Deck (user_cards) ─────────────────────────────────
+      // Persistente Lernkarten pro User (anonym via X-User-Id). Die Tabelle
+      // spiegelt das clientseitige Deck-Modell exakt (interval_hours, kein
+      // SM-2-ease) — bewusst parallel zur ungenutzten user_words-Tabelle,
+      // die für eine spätere SM-2-Migration reserviert bleibt.
+      //
+      //   GET    /api/deck               – ganzes Deck des Users laden
+      //   POST   /api/deck/card          – einzelne Karte upsert (create/update/grade)
+      //   DELETE /api/deck/card/:lemma   – einzelne Karte löschen
+      const isDeckCall = path === "/api/deck" || path.startsWith("/api/deck/card");
+      if (isDeckCall) {
+        // Tabelle idempotent anlegen (wie bug_reports beim ersten Aufruf).
+        await env.DB.prepare(
+          `CREATE TABLE IF NOT EXISTS user_cards (
+            id INTEGER PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            lemma TEXT NOT NULL,
+            lang TEXT NOT NULL,
+            gloss TEXT,
+            pos TEXT,
+            inflected TEXT,
+            sentence TEXT,
+            surface_form TEXT,
+            sentence_en TEXT,
+            chunk_id INTEGER,
+            interval_hours REAL DEFAULT 0,
+            reps INTEGER DEFAULT 0,
+            due TEXT,
+            added TEXT,
+            UNIQUE(user_id, lemma),
+            FOREIGN KEY (user_id) REFERENCES users(id)
+          )`
+        ).run();
+        await env.DB.prepare(
+          `CREATE INDEX IF NOT EXISTS idx_user_cards_user ON user_cards(user_id)`
+        ).run();
+        // User anlegen falls noch nicht vorhanden (analog /api/progress).
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO users (id, type) VALUES (?, 'anon')`
+        ).bind(userId).run();
+      }
+
+      // GET /api/deck – ganzes Deck laden
+      if (path === "/api/deck" && request.method === "GET") {
+        const r = await env.DB.prepare(
+          `SELECT lemma, lang, gloss, pos, inflected, sentence, surface_form,
+                  sentence_en, chunk_id, interval_hours, reps, due, added
+           FROM user_cards WHERE user_id = ? ORDER BY added`
+        ).bind(userId).all();
+        return json({ cards: r.results || [] });
+      }
+
+      // POST /api/deck/card – einzelne Karte upsert
+      if (path === "/api/deck/card" && request.method === "POST") {
+        const b = await request.json();
+        const lemma = (b.lemma || "").toString().trim();
+        if (!lemma) return json({ error: "lemma erforderlich" }, 400);
+        await env.DB.prepare(
+          `INSERT OR REPLACE INTO user_cards
+           (user_id, lemma, lang, gloss, pos, inflected, sentence, surface_form,
+            sentence_en, chunk_id, interval_hours, reps, due, added)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          userId, lemma, (b.lang || "ru").toString().slice(0, 8),
+          b.gloss || null, b.pos || null, b.inflected || null,
+          b.sentence || null, b.surface_form || null, b.sentence_en || null,
+          Number.isInteger(b.chunk_id) ? b.chunk_id : null,
+          Number(b.interval_hours) || 0,
+          Number.isInteger(b.reps) ? b.reps : 0,
+          b.due || null, b.added || null
+        ).run();
+        return json({ ok: true });
+      }
+
+      // DELETE /api/deck/card/:lemma – einzelne Karte löschen
+      const delCardMatch = path.match(/^\/api\/deck\/card\/(.+)$/);
+      if (delCardMatch && request.method === "DELETE") {
+        const lemma = decodeURIComponent(delCardMatch[1]);
+        const r = await env.DB.prepare(
+          `DELETE FROM user_cards WHERE user_id = ? AND lemma = ?`
+        ).bind(userId, lemma).run();
+        return json({ ok: true, deleted: r.meta?.changes || 0 });
       }
 
       // ─── Synonym für ein Wort (live GLM, ohne Cache) ───────────────

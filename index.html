@@ -658,7 +658,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.28";
+      const VERSION = "7.29";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -672,7 +672,15 @@
       }
 
       // --- SRS / Vokabel-Deck (Interval-basiert, Feldnamen kompatibel mit user_words-Schema) ---
+      // Persistenz: localStorage bleibt der schnelle synchrone Cache (UI liest/schreibt
+      // hier). Zusätzlich wird jede Mutation asynchron an die D1 (user_cards) gesynced
+      // via /api/deck/* — so überlebt das Deck eine Cache-Löschung. Beim App-Start
+      // zieht initDeckFromServer() den Server-Stand und überschreibt damit den lokalen
+      // Cache (Server = Source of Truth). Offline-Änderungen werden beim nächsten
+      // Online-Start überschrieben — bewusst akzeptiert zugunsten eines einfachen
+      // Modells. Sync-Fehler blockieren die UI nie (fail silently, nur Konsole).
       const DECK_KEY = "er2_deck";
+      const DECK_MIGRATED_KEY = "er2_deck_migrated";
       function loadDeck() {
         try { return JSON.parse(localStorage.getItem(DECK_KEY) || "{}"); }
         catch (e) { return {}; }
@@ -680,6 +688,76 @@
       function saveDeck(deck) {
         localStorage.setItem(DECK_KEY, JSON.stringify(deck));
         updateBadge();
+      }
+      // Asynchroner Sync einer einzelnen Karte an die D1 (idempotent via INSERT OR REPLACE).
+      // Schlägt fehl ohne UI-Blockade; Fehler nur in der Konsole.
+      async function syncCardToServer(lemma) {
+        try {
+          const c = loadDeck()[lemma];
+          if (!c) return;
+          await fetchWithTimeout(API + "/api/deck/card", {
+            method: "POST",
+            headers: { "Content-Type": "application/json; charset=utf-8", "X-User-Id": userId },
+            body: JSON.stringify({
+              lemma: c.lemma, lang: c.lang || "ru", gloss: c.gloss || null,
+              pos: c.pos || null, inflected: c.inflected || null,
+              sentence: c.sentence || null, surface_form: c.surfaceForm || null,
+              sentence_en: c.sentence_en || null,
+              chunk_id: Number.isInteger(c.chunk_id) ? c.chunk_id : null,
+              interval_hours: Number(c.interval_hours) || 0,
+              reps: Number.isInteger(c.reps) ? c.reps : 0,
+              due: c.due || null, added: c.added || null,
+            }),
+          }, 15000);
+        } catch (e) { console.warn("syncCardToServer failed:", lemma, e.message); }
+      }
+      async function deleteCardFromServer(lemma) {
+        try {
+          await fetchWithTimeout(API + "/api/deck/card/" + encodeURIComponent(lemma), {
+            method: "DELETE",
+            headers: { "X-User-Id": userId },
+          }, 15000);
+        } catch (e) { console.warn("deleteCardFromServer failed:", lemma, e.message); }
+      }
+      // Einmalig beim App-Start: Server-Stand in localStorage laden. Falls Server
+      // leer, aber lokal vorhanden: lokales Deck zum Server pushen (Migration).
+      async function initDeckFromServer() {
+        try {
+          const res = await fetchWithTimeout(API + "/api/deck", {
+            headers: { "X-User-Id": userId },
+          }, 20000);
+          if (!res.ok) return;
+          const data = await res.json();
+          const serverCards = data.cards || [];
+          const localDeck = loadDeck();
+          const localCount = Object.keys(localDeck).length;
+          if (serverCards.length === 0 && localCount > 0 && !localStorage.getItem(DECK_MIGRATED_KEY)) {
+            // Migration: lokales Deck einmalig zum Server pushen
+            for (const lemma of Object.keys(localDeck)) await syncCardToServer(lemma);
+            localStorage.setItem(DECK_MIGRATED_KEY, "1");
+            return;
+          }
+          if (serverCards.length === 0) return;
+          // Server-Stand übernimmt: in lokales Deck umwandeln (surface_form -> surfaceForm).
+          const merged = {};
+          for (const c of serverCards) {
+            merged[c.lemma] = {
+              lemma: c.lemma, gloss: c.gloss || "", pos: c.pos || "",
+              inflected: c.inflected || null, lang: c.lang || "ru",
+              interval_hours: Number(c.interval_hours) || 0,
+              due: c.due || new Date().toISOString(),
+              reps: Number.isInteger(c.reps) ? c.reps : 0,
+              added: c.added || new Date().toISOString(),
+              sentence: c.sentence || null,
+              surfaceForm: c.surface_form || null,
+              sentence_en: c.sentence_en || null,
+              chunk_id: Number.isInteger(c.chunk_id) ? c.chunk_id : null,
+            };
+          }
+          localStorage.setItem(DECK_KEY, JSON.stringify(merged));
+          localStorage.setItem(DECK_MIGRATED_KEY, "1");
+          updateBadge();
+        } catch (e) { console.warn("initDeckFromServer failed:", e.message); }
       }
       // Mini-Satz-Extraktion: gibt den Satz aus dem A1-Text zurück, der eine Form
       // des Lemmas enthält. Liefert { sentence, surfaceForm } oder null.
@@ -752,6 +830,7 @@
           chunk_id: chunkId || null,
         };
         saveDeck(deck);
+        syncCardToServer(entry.lemma);   // asynchron, nicht-blockierend
         return true;
       }
       function getDueCards() {
@@ -774,12 +853,14 @@
         c.interval_hours = newIntervalHours;
         c.due = new Date(Date.now() + newIntervalHours * 3600 * 1000).toISOString();
         saveDeck(deck);
+        syncCardToServer(lemma);   // asynchron, nicht-blockierend
       }
       function removeCard(lemma) {
         const deck = loadDeck();
         if (!deck[lemma]) return false;
         delete deck[lemma];
         saveDeck(deck);
+        deleteCardFromServer(lemma);   // asynchron, nicht-blockierend
         return true;
       }
       function intervalLabel(hours) {
@@ -835,6 +916,7 @@
       });
       updateBadge();  // initialen Badge-Stand setzen
       setInterval(updateBadge, 60000);  // alle 60s aktualisieren (fällige Karten)
+      initDeckFromServer();  // Server-Stand laden (async, nicht-blockierend)
       const levelsEl = document.getElementById("levels");
       const textEl = document.getElementById("chunk-text");
       const nrEl = document.getElementById("chunk-nr");
