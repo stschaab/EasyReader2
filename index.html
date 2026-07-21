@@ -304,6 +304,84 @@
     .review-card .deck-row { cursor: pointer; }
     .review-card .deck-row:hover { background: var(--accent-soft); }
 
+    /* Account-Chip im Header (v7.32) */
+    .account-chip { font-size: 0.78rem; max-width: 130px; overflow: hidden;
+                    text-overflow: ellipsis; white-space: nowrap; }
+    .account-chip #account-name { vertical-align: middle; }
+
+    /* Tickets-Overlay (v7.32) */
+    .tickets-overlay {
+      position: fixed; inset: 0; z-index: 180;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex; align-items: center; justify-content: center; padding: 1rem;
+    }
+    .tickets-overlay.hidden { display: none; }
+    .tickets-card {
+      background: var(--card); border-radius: 12px; padding: 1.2rem;
+      max-width: 540px; width: 100%; max-height: 85vh; overflow-y: auto;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    }
+    .tickets-topbar {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 1rem; font-weight: 600; font-size: 1.05rem;
+    }
+    .tickets-topbar button {
+      background: none; border: none; color: var(--muted);
+      font-size: 1.2rem; cursor: pointer; padding: 0.2rem 0.4rem;
+    }
+    .ticket-row {
+      background: var(--card-2); border-radius: 8px; padding: 0.7rem 0.9rem;
+      margin-bottom: 0.5rem; cursor: pointer; transition: background 0.1s;
+    }
+    .ticket-row:hover { background: var(--accent-soft); }
+    .ticket-row .ticket-title {
+      font-weight: 600; font-size: 0.95rem; margin-bottom: 0.3rem; color: var(--text);
+    }
+    .ticket-row .ticket-desc {
+      font-size: 0.8rem; color: var(--muted); margin-bottom: 0.4rem;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .ticket-row .ticket-meta { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .ticket-badge {
+      font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 4px;
+      background: var(--bg); color: var(--muted); text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .ticket-badge.feature { background: rgba(79, 140, 255, 0.2); color: #8ab4f8; }
+    .ticket-badge.bug { background: rgba(220, 80, 80, 0.2); color: #f58080; }
+    .ticket-badge.improvement { background: rgba(220, 180, 60, 0.2); color: #e8c478; }
+    .ticket-badge.open { background: rgba(80, 200, 120, 0.2); color: #80d090; }
+    .ticket-badge.closed { background: rgba(140, 140, 140, 0.2); color: #b0b0b0; }
+    .ticket-badge.in_progress { background: rgba(220, 160, 60, 0.2); color: #e8b478; }
+    .ticket-detail-desc { font-size: 0.9rem; line-height: 1.5; margin: 0.8rem 0; white-space: pre-wrap; }
+
+    /* Login-Screen (beim ersten Besuch) */
+    .login-overlay {
+      position: fixed; inset: 0; z-index: 300;
+      background: var(--bg);
+      display: flex; align-items: center; justify-content: center; padding: 1rem;
+    }
+    .login-overlay.hidden { display: none; }
+    .login-card {
+      background: var(--card); border-radius: 14px; padding: 1.8rem;
+      max-width: 380px; width: 100%;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    }
+    .login-card h2 { margin: 0 0 0.8rem; font-size: 1.3rem; }
+    .login-card p { color: var(--muted); font-size: 0.9rem; margin: 0 0 1rem; line-height: 1.5; }
+    .login-card input {
+      width: 100%; padding: 0.7rem; font-size: 1rem;
+      background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; font-family: inherit; box-sizing: border-box; margin-bottom: 0.5rem;
+    }
+    .login-card .primary {
+      width: 100%; background: var(--accent); color: white; border: none;
+      padding: 0.7rem; border-radius: 6px; font-size: 1rem; cursor: pointer;
+      font-family: inherit; margin-top: 0.5rem;
+    }
+    .login-hint { font-size: 0.8rem; color: var(--muted); min-height: 1.2em; }
+    .login-subtle { font-size: 0.75rem; color: var(--muted-2); margin-top: 1rem; line-height: 1.4; }
+
     /* Neue-Karte-Formular (Ticket #15) */
     .newcard-overlay {
       position: fixed; inset: 0; z-index: 200;
@@ -596,6 +674,18 @@
 </head>
 <body>
   <div class="app">
+    <!-- Login-Screen (wird per JS gezeigt wenn userId fehlt) -->
+    <div class="login-overlay hidden" id="login-overlay">
+      <div class="login-card">
+        <h2>👋 Willkommen bei EasyReader2</h2>
+        <p>Trage deine E-Mail ein, um deine Lernkarten zu speichern und auf mehreren Geräten zu nutzen.</p>
+        <input id="login-email" type="email" placeholder="deine@email.de" autocomplete="email">
+        <div id="login-status" class="login-hint"></div>
+        <button id="login-submit" class="primary">Los geht's</button>
+        <p class="login-subtle">Kein Passwort nötig — deine E-Mail ist dein Zugang. Wenn du die E-Mail vergisst, siehst du sie oben rechts nach dem Login.</p>
+      </div>
+    </div>
+
     <!-- Buch-Auswahl -->
     <div class="book-select-overlay" id="book-select-overlay">
       <div class="book-select-card">
@@ -617,7 +707,9 @@
       <button class="library-btn review-btn" id="review-btn" aria-label="Vokabeln üben">🎓<span class="due-badge" id="due-badge"></span></button>
       <button class="library-btn" id="newcard-btn" title="Neue Lernkarte">➕</button>
       <button class="library-btn" id="deck-btn" title="Wortliste">📋</button>
+      <button class="library-btn" id="tickets-btn" title="Tickets & Ideen">🏷️</button>
       <button class="library-btn bug-btn" id="bug-btn" aria-label="Fehler melden" title="Fehler melden">🐛</button>
+      <button class="library-btn account-chip" id="account-btn" title="Account">👤 <span id="account-name">…</span></button>
       <a class="library-btn admin-link" id="admin-link" href="admin.html" target="_blank" rel="noopener" aria-label="Tickets / Admin" title="Tickets & Admin">⚙️</a>
     </header>
 
@@ -635,6 +727,17 @@
       </div>
       <div class="review-card" id="review-card">
         <!-- wird per JS gefüllt -->
+      </div>
+    </div>
+
+    <!-- Tickets-Overlay (öffentliche Ticket-Liste, v7.32) -->
+    <div class="tickets-overlay hidden" id="tickets-overlay">
+      <div class="tickets-card">
+        <div class="tickets-topbar">
+          <span>🏷️ Tickets &amp; Ideen</span>
+          <button id="tickets-close-btn" title="Schließen">✕</button>
+        </div>
+        <div id="tickets-list">Lade Tickets…</div>
       </div>
     </div>
 
@@ -737,29 +840,28 @@
 
   <script>
     (function () {
-      const VERSION = "7.31";
+      const VERSION = "7.32";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
       const STORAGE_BOOK = "easyreader2.bookId";
 
       let bookId = null, book = null, chunks = [], idx = 0, level = "original";
-      // Identität: Stefan hat eine feste Owner-ID, damit seine Lernkarten
-      // geräteübergreifend synchronisieren (Mobile + PC teilen sich denselben
-      // D1-Deck). Alte anonyme IDs werden beim Start auf "stefan" gemappt;
-      // initDeckFromServer() kümmert sich danach um den Abgleich der Decks.
-      // Für echten Multi-User-Betrieb wäre später ein Login-System nötig.
-      const OWNER_USER_ID = "stefan";
-      const LEGACY_USER_IDS = ["anon-wq9nhp3n"];   // Mobile-ID vor Sync-Einführung
+      // Identität: Die E-Mail-Adresse ist der User-Identifier (kein Passwort,
+      // keine sensiblen Daten). Beim ersten Besuch erscheint ein Login-Screen.
+      // LEGACY_MAP: Alte Hardcodierungen ('stefan', 'anon-wq9nhp3n') werden
+      // auf Stefans E-Mail gemappt, damit bestehende Geräte nahtlos weiterlaufen.
+      const LEGACY_MAP = {
+        "stefan": "st.schaab@gmail.com",
+        "anon-wq9nhp3n": "st.schaab@gmail.com",
+      };
       let userId = localStorage.getItem("easyreader2.userId");
-      const userIdChanged = userId && LEGACY_USER_IDS.includes(userId);
-      if (!userId || userIdChanged) {
-        userId = OWNER_USER_ID;
+      if (userId && LEGACY_MAP[userId]) {
+        // Legacy-Migration auf E-Mail-Identität
+        userId = LEGACY_MAP[userId];
         localStorage.setItem("easyreader2.userId", userId);
+        localStorage.removeItem("er2_deck_migrated");   // einmalig Server-Stand ziehen
       }
-      // Bei Legacy-Wechsel Migration erzwingen (das migrated-Flag ist pro
-      // Browser, nicht pro userId — also zurücksetzen).
-      if (userIdChanged) localStorage.removeItem("er2_deck_migrated");
 
       // --- SRS / Vokabel-Deck (Interval-basiert, Feldnamen kompatibel mit user_words-Schema) ---
       // Persistenz: localStorage bleibt der schnelle synchrone Cache (UI liest/schreibt
@@ -868,6 +970,157 @@
           updateBadge();
         } catch (e) { console.warn("initDeckFromServer failed:", e.message); }
       }
+
+      // ─── Login / Registrierung via E-Mail (v7.32) ────────────────────
+      // Login-Screen anzeigen (beim ersten Besuch oder „Abmelden"). Die
+      // Buch-Auswahl bleibt verdeckt, bis erfolgreich eingeloggt wurde.
+      const loginOverlay = document.getElementById("login-overlay");
+      const loginEmail = document.getElementById("login-email");
+      const loginStatus = document.getElementById("login-status");
+      const loginSubmit = document.getElementById("login-submit");
+      const bookSelectOverlay = document.getElementById("book-select-overlay");
+      function showLoginScreen() {
+        loginOverlay.classList.remove("hidden");
+        bookSelectOverlay.classList.add("hidden");
+        loginEmail.value = "";
+        loginStatus.textContent = "";
+        setTimeout(() => loginEmail.focus(), 50);
+      }
+      async function submitLogin() {
+        const email = loginEmail.value.trim().toLowerCase();
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+          loginStatus.textContent = "Bitte eine gültige E-Mail-Adresse eingeben.";
+          return;
+        }
+        loginSubmit.disabled = true;
+        loginSubmit.textContent = "…";
+        loginStatus.textContent = "";
+        try {
+          const res = await fetchWithTimeout(API + "/api/user/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email }),
+          }, 15000);
+          const data = await res.json();
+          if (!data.ok) throw new Error(data.error || "Login fehlgeschlagen");
+          userId = email;
+          localStorage.setItem("easyreader2.userId", userId);
+          loginOverlay.classList.add("hidden");
+          bookSelectOverlay.classList.remove("hidden");
+          updateAccountChip();
+          initDeckFromServer();
+          loadLibrary();
+        } catch (e) {
+          loginStatus.textContent = "Fehler: " + e.message;
+        } finally {
+          loginSubmit.disabled = false;
+          loginSubmit.textContent = "Los geht's";
+        }
+      }
+      loginSubmit.addEventListener("click", submitLogin);
+      loginEmail.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); submitLogin(); }
+      });
+
+      // ─── Account-Chip (v7.32) ────────────────────────────────────────
+      // Zeigt die aktuelle E-Mail-Identität oben rechts. Klick öffnet ein
+      // Prompt mit Account-Infos + Abmelden-Option.
+      const accountBtn = document.getElementById("account-btn");
+      const accountName = document.getElementById("account-name");
+      function updateAccountChip() {
+        if (!userId) { accountName.textContent = "?"; return; }
+        // E-Mail auf Präfix kürzen (vor dem @), wenn zu lang
+        const prefix = userId.split("@")[0];
+        accountName.textContent = prefix.length > 14 ? prefix.slice(0, 12) + "…" : prefix;
+      }
+      updateAccountChip();
+      accountBtn.addEventListener("click", () => {
+        if (!userId) return;
+        const choice = confirm(
+          "Angemeldet als:\n" + userId + "\n\n" +
+          "OK = Abmelden (lokale Karten gehen verloren, falls nicht synchronisiert)\n" +
+          "Abbrechen = eingeloggt bleiben"
+        );
+        if (choice) {
+          localStorage.removeItem("easyreader2.userId");
+          localStorage.removeItem("er2_deck_migrated");
+          localStorage.removeItem("er2_deck");
+          userId = null;
+          showLoginScreen();
+          updateAccountChip();
+        }
+      });
+
+      // ─── Tickets-Overlay (v7.32) ─────────────────────────────────────
+      // Öffentliche Ticket-Liste + Detailansicht. PATCH/DELETE bleiben
+      // Admin-only (hier nicht verfügbar).
+      const ticketsOverlay = document.getElementById("tickets-overlay");
+      const ticketsList = document.getElementById("tickets-list");
+      async function openTickets() {
+        ticketsOverlay.classList.remove("hidden");
+        ticketsList.textContent = "Lade Tickets…";
+        try {
+          const res = await fetchWithTimeout(API + "/api/tickets", {}, 15000);
+          const data = await res.json();
+          renderTicketsList(data.tickets || []);
+        } catch (e) {
+          ticketsList.textContent = "Fehler beim Laden: " + e.message;
+        }
+      }
+      function closeTickets() { ticketsOverlay.classList.add("hidden"); }
+      function renderTicketsList(tickets) {
+        if (!tickets.length) { ticketsList.innerHTML = '<p class="counter">Keine Tickets.</p>'; return; }
+        const html = tickets.map(t => {
+          const title = (t.title || t.description || "").replace(/\n/g, " ").slice(0, 80) || "(ohne Titel)";
+          const desc = (t.description || "").replace(/\n/g, " ").slice(0, 160);
+          const type = t.type || "bug";
+          const status = t.status || "open";
+          return '<div class="ticket-row" data-ticket-id="' + t.id + '">' +
+                   '<div class="ticket-title">' + escapeHtml(title) + '</div>' +
+                   (desc ? '<div class="ticket-desc">' + escapeHtml(desc) + '</div>' : '') +
+                   '<div class="ticket-meta">' +
+                     '<span class="ticket-badge ' + type + '">' + type + '</span>' +
+                     '<span class="ticket-badge ' + status + '">' + status.replace("_", " ") + '</span>' +
+                     (t.priority ? '<span class="ticket-badge">' + t.priority + '</span>' : '') +
+                   '</div>' +
+                 '</div>';
+        }).join("");
+        ticketsList.innerHTML = html;
+        // Click-Handler
+        ticketsList.querySelectorAll(".ticket-row").forEach(row => {
+          row.addEventListener("click", () => openTicketDetail(parseInt(row.dataset.ticketId, 10)));
+        });
+      }
+      async function openTicketDetail(id) {
+        ticketsList.textContent = "Lade Ticket #" + id + "…";
+        try {
+          const res = await fetchWithTimeout(API + "/api/tickets/" + id, {}, 15000);
+          const data = await res.json();
+          const t = data.ticket;
+          if (!t) { ticketsList.textContent = "Nicht gefunden."; return; }
+          const title = (t.title || t.description || "").replace(/\n/g, " ").slice(0, 80) || "(ohne Titel)";
+          const type = t.type || "bug";
+          const status = t.status || "open";
+          ticketsList.innerHTML =
+            '<button class="review-topbar-btn" id="ticket-back-btn" style="margin-bottom:0.8rem">← Zurück</button>' +
+            '<div class="ticket-title" style="font-size:1.05rem">' + escapeHtml(title) + '</div>' +
+            '<div class="ticket-meta" style="margin:0.5rem 0">' +
+              '<span class="ticket-badge ' + type + '">' + type + '</span>' +
+              '<span class="ticket-badge ' + status + '">' + status.replace("_", " ") + '</span>' +
+              (t.priority ? '<span class="ticket-badge">' + t.priority + '</span>' : '') +
+              (t.version ? '<span class="ticket-badge">v' + escapeHtml(t.version) + '</span>' : '') +
+            '</div>' +
+            '<div class="ticket-detail-desc">' + escapeHtml(t.description || "") + '</div>';
+          document.getElementById("ticket-back-btn").addEventListener("click", openTickets);
+        } catch (e) {
+          ticketsList.textContent = "Fehler: " + e.message;
+        }
+      }
+      document.getElementById("tickets-btn").addEventListener("click", openTickets);
+      document.getElementById("tickets-close-btn").addEventListener("click", closeTickets);
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !ticketsOverlay.classList.contains("hidden")) closeTickets();
+      });
       // Mini-Satz-Extraktion: gibt den Satz aus dem A1-Text zurück, der eine Form
       // des Lemmas enthält. Liefert { sentence, surfaceForm } oder null.
       // Matching-Strategie: Wortgrenzen-treues Lowercase-Matching auf den Lemma-Stamm.
@@ -1025,7 +1278,14 @@
       });
       updateBadge();  // initialen Badge-Stand setzen
       setInterval(updateBadge, 60000);  // alle 60s aktualisieren (fällige Karten)
-      initDeckFromServer();  // Server-Stand laden (async, nicht-blockierend)
+      // Login-Gate: Falls noch keine userId vorhanden, Login-Screen anzeigen
+      // und App-Init zurückhalten, bis Login erfolgt. Andernfalls normal starten.
+      if (!userId) {
+        showLoginScreen();
+      } else {
+        initDeckFromServer();  // Server-Stand laden (async, nicht-blockierend)
+        loadLibrary();
+      }
       const levelsEl = document.getElementById("levels");
       const textEl = document.getElementById("chunk-text");
       const nrEl = document.getElementById("chunk-nr");

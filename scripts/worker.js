@@ -9,6 +9,9 @@
 //   GET    /api/deck              – Vokabel-Deck laden (anonym via X-User-Id)
 //   POST   /api/deck/card         – einzelne Lernkarte upsert (create/update/grade)
 //   DELETE /api/deck/card/:lemma  – einzelne Lernkarte löschen
+//   POST   /api/user/login        – Login/Registrierung via E-Mail (kein Passwort)
+//   GET    /api/tickets           – öffentliche Ticket-Liste (reduzierte Felder)
+//   GET    /api/tickets/:id       – einzelnes Ticket öffentlich
 //   POST /api/bug-report          – Bug-Report mit optionalem Screenshot speichern
 //   POST /api/synonym             – Synonym+Rang+EN für ein spanisches Wort (GLM, live)
 //   GET  /api/admin/bug-reports   – Ticket-Liste (X-Admin-Key geschützt)
@@ -933,6 +936,83 @@ export default {
           `DELETE FROM user_cards WHERE user_id = ? AND lemma = ?`
         ).bind(userId, lemma).run();
         return json({ ok: true, deleted: r.meta?.changes || 0 });
+      }
+
+      // ─── User-Login / Registrierung (E-Mail als Identität, kein Passwort) ───
+      // Wer zuerst eine E-Mail-Adresse angibt, bekommt sie als userId. Es gibt
+      // keine Passwort-Prüfung — ER hat keine sensiblen Daten, die E-Mail allein
+      // dient als geräteübergreifende Identität.
+      if (path === "/api/user/login" && request.method === "POST") {
+        const b = await request.json();
+        const email = (b.email || "").toString().trim().toLowerCase();
+        // Sehr einfache E-Mail-Validierung: muss @ und einen Punkt in der Domain haben.
+        if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+          return json({ error: "Bitte eine gültige E-Mail-Adresse eingeben." }, 400);
+        }
+        const existing = await env.DB.prepare(`SELECT id FROM users WHERE id = ?`).bind(email).first();
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO users (id, type, email) VALUES (?, 'email', ?)`
+        ).bind(email, email).run();
+        return json({ ok: true, email, new: !existing });
+      }
+
+      // ─── Öffentliche Ticket-Liste (für alle eingeloggten Nutzer) ───
+      // Reduzierte Felder: KEIN screenshot (base64, zu groß + privat), KEIN
+      // user_agent, KEIN note (Admin-Notiz), KEIN user_id (Datenschutz:
+      // Reporter-Adressen sind nicht öffentlich).
+      if (path === "/api/tickets" && request.method === "GET") {
+        const r = await env.DB.prepare(
+          `SELECT id, version, book_id, chunk_index, level,
+                  description, created_at, updated_at,
+                  type, title, status, priority,
+                  (screenshot IS NOT NULL) AS has_screenshot
+           FROM bug_reports ORDER BY created_at DESC LIMIT 200`
+        ).all();
+        return json({ tickets: r.results });
+      }
+
+      // ─── Einzelnes Ticket öffentlich (ohne sensitive Felder) ───
+      const ticketMatch = path.match(/^\/api\/tickets\/(\d+)$/);
+      if (ticketMatch && request.method === "GET") {
+        const id = parseInt(ticketMatch[1], 10);
+        const row = await env.DB.prepare(
+          `SELECT id, version, book_id, chunk_index, level, description, created_at, updated_at,
+                  type, title, status, priority,
+                  (screenshot IS NOT NULL) AS has_screenshot
+           FROM bug_reports WHERE id = ?`
+        ).bind(id).first();
+        if (!row) return json({ error: "nicht gefunden" }, 404);
+        return json({ ticket: row });
+      }
+
+      // ─── TEMPORÄRER Migrations-Endpunkt: Legacy-User auf E-Mail umbiegen ───
+      // Einmalig nach v7.32-Deploy aufrufen, danach kann der Block entfernt werden.
+      // Auth via X-Admin-Key, damit niemand fremdes ausführt.
+      if (path === "/api/admin/migrate-user" && request.method === "POST") {
+        const adminKey = request.headers.get("X-Admin-Key");
+        if (adminKey !== env.ADMIN_KEY) return json({ error: "unauthorized" }, 401);
+        const b = await request.json();
+        const fromId = (b.from || "").toString();
+        const toId = (b.to || "").toString().toLowerCase();
+        if (!fromId || !toId) return json({ error: "from und to erforderlich" }, 400);
+        // 1. user_cards migrieren
+        const uc = await env.DB.prepare(
+          `UPDATE user_cards SET user_id = ? WHERE user_id = ?`
+        ).bind(toId, fromId).run();
+        // 2. progress migrieren
+        const pr = await env.DB.prepare(
+          `UPDATE progress SET user_id = ? WHERE user_id = ?`
+        ).bind(toId, fromId).run();
+        // 3. users: Ziel-Eintrag anlegen (falls nicht vorhanden), Quelle löschen
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO users (id, type, email) VALUES (?, 'email', ?)`
+        ).bind(toId, toId).run();
+        await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(fromId).run();
+        return json({
+          ok: true, from: fromId, to: toId,
+          migrated_cards: uc.meta?.changes || 0,
+          migrated_progress: pr.meta?.changes || 0,
+        });
       }
 
       // ─── Synonym für ein Wort (live GLM, ohne Cache) ───────────────
