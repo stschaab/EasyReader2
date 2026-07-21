@@ -642,9 +642,11 @@
     </div>
 
     <footer id="main-footer" style="display:none">
+      <button class="nav-btn" id="first" aria-label="Erster Absatz" title="Erster Absatz">⏮</button>
       <button class="nav-btn" id="prev" aria-label="Zurück">‹</button>
       <div class="counter" id="counter"></div>
       <button class="nav-btn" id="next" aria-label="Weiter">›</button>
+      <button class="nav-btn" id="last" aria-label="Letzter Absatz" title="Letzter Absatz">⏭</button>
     </footer>
   </div>
 
@@ -652,7 +654,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.26";
+      const VERSION = "7.27";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -835,6 +837,8 @@
       const counterEl = document.getElementById("counter");
       const prevBtn = document.getElementById("prev");
       const nextBtn = document.getElementById("next");
+      const firstBtn = document.getElementById("first");
+      const lastBtn = document.getElementById("last");
       const ttsBar = document.getElementById("tts-bar");
       const ttsBtn = document.getElementById("tts-btn");
       const ttsRate = document.getElementById("tts-rate");
@@ -1378,6 +1382,30 @@
         saveProgress();
         checkForUpdate();  // beim Seitenwechsel nach neuer Version schauen
       }
+      // Absoluter Sprung zu einem Index (für ⏮/⏭ und Zahleneingabe).
+      // Übergabe ist 0-basierter Index; Eingaben sind 1-basiert (User-Sicht).
+      function goTo(targetIdx) {
+        if (!Number.isInteger(targetIdx)) return;
+        if (targetIdx < 0) targetIdx = 0;
+        if (targetIdx >= chunks.length) targetIdx = chunks.length - 1;
+        if (targetIdx === idx) return;
+        idx = targetIdx;
+        render();
+        saveProgress();
+        checkForUpdate();
+      }
+      // Prompt für Zahleneingabe: springt zum 1-basierten Absatz.
+      function promptGoTo() {
+        if (!chunks.length) return;
+        const input = window.prompt(
+          "Zu welchem Absatz springen? (1 bis " + chunks.length + ")",
+          String(idx + 1)
+        );
+        if (input == null) return;  // Abbrechen
+        const n = parseInt(input.trim(), 10);
+        if (!Number.isFinite(n) || n < 1 || n > chunks.length) return;  // ungültig -> still verwerfen
+        goTo(n - 1);
+      }
 
       // ─── Update-Check: vergleicht lokale VERSION mit library.json.version ───
       // Triggert bei: Seitenwechsel, Level-Wechsel, und alle 5 Min.
@@ -1478,6 +1506,8 @@
           '<span class="ver">v' + VERSION + '</span>';
         prevBtn.disabled = idx === 0;
         nextBtn.disabled = idx === chunks.length - 1;
+        firstBtn.disabled = idx === 0;
+        lastBtn.disabled = idx === chunks.length - 1;
       }
 
       // Lädt die Vereinfachungen für einen Chunk on-demand vom Server
@@ -1640,6 +1670,12 @@
 
       prevBtn.addEventListener("click", function () { stopTTS(); go(-1); });
       nextBtn.addEventListener("click", function () { stopTTS(); go(1); });
+      firstBtn.addEventListener("click", function () { stopTTS(); goTo(0); });
+      lastBtn.addEventListener("click", function () { stopTTS(); goTo(chunks.length - 1); });
+      // Counter ist klickbar -> Zahleneingabe für direkten Sprung (#13)
+      counterEl.addEventListener("click", promptGoTo);
+      counterEl.style.cursor = "pointer";
+      counterEl.title = "Auf Absatz springen";
       document.addEventListener("keydown", function (e) {
         if (e.key === "ArrowLeft") go(-1);
         else if (e.key === "ArrowRight") go(1);
