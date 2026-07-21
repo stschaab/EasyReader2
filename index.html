@@ -122,6 +122,10 @@
       -webkit-tap-highlight-color: rgba(79, 140, 255, 0.25); transition: background 0.1s;
     }
     .chunk-text .word:active { background: var(--accent-soft); }
+    .chunk-text .a1e-gloss {
+      color: var(--muted); font-style: italic; font-size: 0.85em;
+      cursor: default; -webkit-tap-highlight-color: transparent;
+    }
     .placeholder { text-align: center; color: var(--muted); padding: 2rem 1rem; }
     .placeholder .icon { font-size: 2rem; display: block; margin-bottom: 0.6rem; opacity: 0.6; }
     .placeholder .pill {
@@ -654,7 +658,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.27";
+      const VERSION = "7.28";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -965,6 +969,7 @@
             if (lvl === "original") label = "Original";
             else if (lvl === "EN") label = "EN";
             else if (lvl === "EN-A1") label = "EN-A1";
+            else if (lvl === "A1e") label = "A1e";
             else if (CEFR_LEVELS.indexOf(lvl) >= 0) label = lvl;
             else label = lvl + " W.";
             b.textContent = label;
@@ -1465,6 +1470,34 @@
         return text.replace(regex, function (w) { return '<span class="word">' + w + "</span>"; });
       }
 
+      // Wie wrapWords, aber lässt den Inhalt von Inline-Glossen "(english)" unverändert.
+      // Wird für A1e gebraucht: spanischer Text + englische Klammern; nur spanische
+      // Wörter sollen klickbar sein, nicht die englischen Glossen.
+      function wrapWordsWithGlosses(text) {
+        const regex = book && book.word_regex ? new RegExp(book.word_regex, "g") : /[А-Яа-яЁё]+/g;
+        // Tokenisierung: trenne den Text in Glossen-Segmente und Nicht-Glossen-Segmente.
+        // Eine Glosse ist "( ... )" direkt nach einem Wort (ohne Leerzeichen zwischen
+        // Wort und Klammer haben wir "wort (gloss)" — wir erkennen " (xxx)" via Regex.
+        let out = "";
+        const glossRe = / \(([^)]*)\)/g;
+        let last = 0;
+        let m;
+        while ((m = glossRe.exec(text)) !== null) {
+          // Text vor der Glosse: normal wrappen
+          out += text.slice(last, m.index).replace(regex, function (w) {
+            return '<span class="word">' + w + "</span>";
+          });
+          // Die Glosse selbst: als unveränderter Text mit eigener Klasse
+          out += ' <span class="a1e-gloss">(' + m[1] + ")</span>";
+          last = m.index + m[0].length;
+        }
+        // Rest nach der letzten Glosse
+        out += text.slice(last).replace(regex, function (w) {
+          return '<span class="word">' + w + "</span>";
+        });
+        return out;
+      }
+
       function render() {
         const p = chunks[idx];
         if (!p) return;
@@ -1491,7 +1524,9 @@
           if (val && val.trim()) {
             // Bereits geladen (Cache oder on-demand)
             textEl.className = "chunk-text";
-            textEl.innerHTML = wrapWords(val);
+            // A1e = A1-Text mit englischen Inline-Glossen "(...)": spanische Wörter
+            // klickbar, Glossen als reiner Text (siehe wrapWordsWithGlosses).
+            textEl.innerHTML = level === "A1e" ? wrapWordsWithGlosses(val) : wrapWords(val);
           } else if (p._loaded) {
             // Chunk-Daten wurden schon geladen, Level aber leer → ad-hoc generieren
             renderAdHoc(p, level);

@@ -111,16 +111,28 @@ export default {
            WHERE c.book_id = ? ORDER BY c.order_index`
         ).bind(bookId).all();
 
-        const chunksOut = chunks.results.map((c) => ({
+        // Levels dynamisch ermitteln: welche simplification-levels hat dieses Buch?
+        // Liefert z.B. ["A1","A1e","A2","B1","EN"] für Zalacaín oder ["A2","B1","EN"] für Tolstoi.
+        const levelRows = await env.DB.prepare(
+          `SELECT DISTINCT level FROM simplifications s
+           JOIN chunks c ON s.chunk_id = c.id WHERE c.book_id = ? ORDER BY level`
+        ).bind(bookId).all();
+        const levels = levelRows.results.map(r => r.level);
+
+        // Leere Felder für alle vorhandenen Levels vorbereiten (wie früher hartcodiert).
+        // Frontend liest die Werte später über /api/books/:id/simplifications nach.
+        const levelFields = {};
+        for (const lvl of levels) levelFields[lvl] = "";
+
+        const chunksOut = chunks.results.map((c) => Object.assign({
           id: c.id,
           order_index: c.order_index,
           chapter: c.chapter_num ? "Т." + (c.volume || 1) + " · Ч." + (c.part || 1) + " · Гл. " + toRoman(c.chapter_num) : null,
           original: c.original_text,
           word_count: c.word_count,
-          C1: "", B2: "", B1: "", A2: "",
-        }));
+        }, levelFields));
 
-        return json({ book, chunks: chunksOut });
+        return json({ book, chunks: chunksOut, levels });
       }
 
       // ─── Alle Vereinfachungen für ein Buch (ein großer Request) ───
@@ -146,6 +158,9 @@ export default {
       if (path === "/api/simplify" && request.method === "POST") {
         const { chunk_id, level } = await request.json();
         if (!chunk_id || !level) return json({ error: "chunk_id und level erforderlich" }, 400);
+        // A1e ist ein Offline-Format (A1-Text + englische Inline-Glossen) und
+        // kann nicht on-demand vom Worker erzeugt werden.
+        if (level === "A1e") return json({ error: "A1e ist nur offline verfügbar (vorab generiert)." }, 400);
         if (!CEFR_RANK[level]) return json({ error: "Unbekanntes Level: " + level }, 400);
 
         // 1. Chunk laden
