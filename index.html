@@ -658,18 +658,29 @@
 
   <script>
     (function () {
-      const VERSION = "7.29";
+      const VERSION = "7.30";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
       const STORAGE_BOOK = "easyreader2.bookId";
 
       let bookId = null, book = null, chunks = [], idx = 0, level = "original";
+      // Identität: Stefan hat eine feste Owner-ID, damit seine Lernkarten
+      // geräteübergreifend synchronisieren (Mobile + PC teilen sich denselben
+      // D1-Deck). Alte anonyme IDs werden beim Start auf "stefan" gemappt;
+      // initDeckFromServer() kümmert sich danach um den Abgleich der Decks.
+      // Für echten Multi-User-Betrieb wäre später ein Login-System nötig.
+      const OWNER_USER_ID = "stefan";
+      const LEGACY_USER_IDS = ["anon-wq9nhp3n"];   // Mobile-ID vor Sync-Einführung
       let userId = localStorage.getItem("easyreader2.userId");
-      if (!userId) {
-        userId = "anon-" + Math.random().toString(36).slice(2, 10);
+      const userIdChanged = userId && LEGACY_USER_IDS.includes(userId);
+      if (!userId || userIdChanged) {
+        userId = OWNER_USER_ID;
         localStorage.setItem("easyreader2.userId", userId);
       }
+      // Bei Legacy-Wechsel Migration erzwingen (das migrated-Flag ist pro
+      // Browser, nicht pro userId — also zurücksetzen).
+      if (userIdChanged) localStorage.removeItem("er2_deck_migrated");
 
       // --- SRS / Vokabel-Deck (Interval-basiert, Feldnamen kompatibel mit user_words-Schema) ---
       // Persistenz: localStorage bleibt der schnelle synchrone Cache (UI liest/schreibt
@@ -731,14 +742,33 @@
           const serverCards = data.cards || [];
           const localDeck = loadDeck();
           const localCount = Object.keys(localDeck).length;
-          if (serverCards.length === 0 && localCount > 0 && !localStorage.getItem(DECK_MIGRATED_KEY)) {
-            // Migration: lokales Deck einmalig zum Server pushen
+          const alreadyMigrated = !!localStorage.getItem(DECK_MIGRATED_KEY);
+
+          // Server-Karten als Map (lemma -> card) für Lookup
+          const serverMap = {};
+          for (const c of serverCards) serverMap[c.lemma] = c;
+
+          // FALL A: Server leer, lokal vorhanden, noch nicht migriert
+          //         → lokales Deck zum Server pushen (Migration).
+          if (serverCards.length === 0 && localCount > 0 && !alreadyMigrated) {
             for (const lemma of Object.keys(localDeck)) await syncCardToServer(lemma);
             localStorage.setItem(DECK_MIGRATED_KEY, "1");
             return;
           }
+          // FALL B: Server leer, lokal leer oder bereits migriert → nichts zu tun.
           if (serverCards.length === 0) return;
+
+          // FALL C: Server hat Karten. Gibt es lokale Karten, die auf dem Server
+          //         fehlen (z.B. Mobile-Deck nach Legacy-Wechsel)? Dann pushen
+          //         wir die fehlenden, damit das Mobile-Deck als Master wirkt.
+          if (!alreadyMigrated && localCount > 0) {
+            for (const lemma of Object.keys(localDeck)) {
+              if (!serverMap[lemma]) await syncCardToServer(lemma);
+            }
+          }
+
           // Server-Stand übernimmt: in lokales Deck umwandeln (surface_form -> surfaceForm).
+          // Das überschreibt das lokale Deck bewusst — Server = Source of Truth.
           const merged = {};
           for (const c of serverCards) {
             merged[c.lemma] = {
