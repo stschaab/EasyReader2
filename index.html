@@ -242,6 +242,18 @@
     .review-card { max-width: 460px; width: 100%; text-align: center; }
     .review-card h2 { margin: 0 0 0.5rem; font-size: 1.3rem; }
     .review-card .counter { color: var(--muted); font-size: 0.85rem; margin: 0 0 1.5rem; }
+    /* SRS-Status-Badge in der Counter-Zeile (#8): zeigt reps, Intervall, Fälligkeit */
+    .review-card .counter .srs-badge {
+      display: inline-block; margin-left: 0.4rem; padding: 0.1rem 0.45rem;
+      border-radius: 6px; font-size: 0.72rem; font-weight: 600;
+      background: var(--card-2); color: var(--muted); border: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    .review-card .counter .srs-badge.srs-new {
+      color: var(--accent); background: var(--accent-soft); border-color: var(--accent);
+    }
+    .review-card .counter .srs-due-now { color: var(--accent); font-weight: 700; }
+    .review-card .counter .srs-due-future { color: var(--muted-2); }
     .review-card .vocab-lemma {
       font-size: clamp(2rem, 8vw, 2.8rem); font-weight: 700; color: var(--accent);
       margin: 1rem 0 0.4rem; word-break: break-word;
@@ -519,6 +531,7 @@
     .deck-row-main { flex: 1; min-width: 0; }
     .deck-row-lemma { font-weight: 600; color: var(--text); }
     .deck-row-reps { color: var(--muted-2); font-size: 0.75rem; }
+    .deck-row-interval { color: var(--text); font-size: 0.72rem; font-weight: 500; }
     .deck-row-due { color: var(--accent); font-size: 0.72rem; font-weight: 600; }
     .deck-row-future { color: var(--muted-2); font-size: 0.72rem; }
     .deck-row-gloss { color: var(--muted); font-size: 0.78rem; margin-top: 2px;
@@ -639,7 +652,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.25";
+      const VERSION = "7.26";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1055,6 +1068,7 @@
                 '<div class="deck-row-main">' +
                   '<span class="deck-row-lemma">' + escapeHtml(c.lemma) + '</span>' +
                   (c.reps > 0 ? ' <span class="deck-row-reps">×' + c.reps + '</span>' : '') +
+                  ((c.reps || 0) > 0 && c.interval_hours ? ' <span class="deck-row-interval" title="aktuelles Intervall">⏱ ' + intervalLabel(c.interval_hours) + '</span>' : '') +
                   (isDue ? ' <span class="deck-row-due">fällig</span>' : ' <span class="deck-row-future">in ' + intervalLabel(Math.max(0.5, (due.getTime() - now.getTime()) / 3600000)) + '</span>') +
                   (c.gloss ? '<div class="deck-row-gloss">' + escapeHtml(c.gloss.substring(0, 60)) + (c.gloss.length > 60 ? '…' : '') + '</div>' : '') +
                 '</div>' +
@@ -1149,6 +1163,7 @@
           (rc ? '<div class="vocab-rank">' + lemmaBadgeHtml() + '</div>' : '') +
           '<div class="detail-stats">' +
             '<span>×' + (c.reps || 0) + ' geübt</span>' +
+            ((c.reps || 0) > 0 && c.interval_hours ? '<span>⏱ ' + intervalLabel(c.interval_hours) + '</span>' : '') +
             '<span>' + dueText + '</span>' +
             '<span>Lang: ' + escapeHtml(c.lang || '?') + '</span>' +
           '</div>' +
@@ -1229,9 +1244,27 @@
         const currentInterval = c.interval_hours || 0;
         const newDouble = Math.max(currentInterval * 2, 24);
 
+        // SRS-Status-Badge (#8): zeigt reps, aktuelles Intervall und Fälligkeit,
+        // damit man beim Üben sieht, wo die Karte gerade steht — vor allem BEVOR
+        // man bewertet. Neu hinzugefügte Karten haben reps=0 -> "neu".
+        const srsDueDate = new Date(c.due);
+        const srsNow = new Date();
+        const srsIsDue = srsDueDate.getTime() <= srsNow.getTime();
+        let srsBadge;
+        if ((c.reps || 0) === 0) {
+          srsBadge = '<span class="srs-badge srs-new">neu</span>';
+        } else {
+          // "aktuell"-Intervall + Fälligkeit ("fällig" oder "in Xd")
+          const curLabel = intervalLabel(currentInterval);
+          const dueLabel = srsIsDue
+            ? '<span class="srs-due-now">fällig</span>'
+            : '<span class="srs-due-future">in ' + intervalLabel(Math.max(0.5, (srsDueDate.getTime() - srsNow.getTime()) / 3600000)) + '</span>';
+          srsBadge = '<span class="srs-badge">×' + (c.reps || 0) + ' · Intervall ' + curLabel + ' · ' + dueLabel + '</span>';
+        }
+
         const cardHtml =
           '<h2>🎓 Üben <button class="card-delete-btn" id="card-delete-btn" title="Diese Karte löschen">🗑</button></h2>' +
-          '<p class="counter">Karte ' + (reviewPos + 1) + ' / ' + total + '</p>' +
+          '<p class="counter">Karte ' + (reviewPos + 1) + ' / ' + total + ' ' + srsBadge + '</p>' +
           '<div class="card-front-row">' +
             esHtml +
             '<button class="card-tts-btn" id="card-tts-btn" title="Satz vorlesen">🔊</button>' +
