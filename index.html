@@ -304,6 +304,52 @@
     .review-card .deck-row { cursor: pointer; }
     .review-card .deck-row:hover { background: var(--accent-soft); }
 
+    /* Neue-Karte-Formular (Ticket #15) */
+    .newcard-overlay {
+      position: fixed; inset: 0; z-index: 200;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex; align-items: center; justify-content: center; padding: 1rem;
+    }
+    .newcard-overlay.hidden { display: none; }
+    .newcard-card {
+      background: var(--card); border-radius: 12px; padding: 1.2rem;
+      max-width: 420px; width: 100%; max-height: 90vh; overflow-y: auto;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    }
+    .newcard-topbar {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 1rem; font-weight: 600; font-size: 1.05rem;
+    }
+    .newcard-topbar button {
+      background: none; border: none; color: var(--muted);
+      font-size: 1.2rem; cursor: pointer; padding: 0.2rem 0.4rem;
+    }
+    .newcard-card label {
+      display: block; font-size: 0.8rem; color: var(--muted);
+      margin: 0.7rem 0 0.3rem;
+    }
+    .newcard-card input, .newcard-card select, .newcard-card textarea {
+      width: 100%; padding: 0.5rem 0.7rem; font-size: 1rem;
+      background: var(--bg); color: var(--text); border: 1px solid var(--border);
+      border-radius: 6px; font-family: inherit; box-sizing: border-box;
+    }
+    .newcard-card textarea { resize: vertical; }
+    #newcard-lookup-btn {
+      margin-top: 0.5rem; padding: 0.4rem 0.8rem; background: var(--card);
+      border: 1px solid var(--border); color: var(--text); border-radius: 6px;
+      cursor: pointer; font-family: inherit; font-size: 0.9rem;
+    }
+    #newcard-save-btn.primary {
+      background: var(--accent); color: white; border: none;
+      padding: 0.6rem 1.2rem; border-radius: 6px; font-size: 1rem;
+      cursor: pointer; font-family: inherit;
+    }
+    .newcard-hint {
+      font-size: 0.8rem; color: var(--muted);
+      display: block; min-height: 1.2em; margin-top: 0.3rem;
+    }
+    .newcard-actions { margin-top: 1rem; text-align: right; }
+
     /* Synonym-Popup (über dem Review-Overlay) */
     .syn-overlay {
       position: fixed; inset: 0; z-index: 160;
@@ -569,6 +615,8 @@
       </div>
       <button class="library-btn" id="library-btn" aria-label="Bibliothek">📚</button>
       <button class="library-btn review-btn" id="review-btn" aria-label="Vokabeln üben">🎓<span class="due-badge" id="due-badge"></span></button>
+      <button class="library-btn" id="newcard-btn" title="Neue Lernkarte">➕</button>
+      <button class="library-btn" id="deck-btn" title="Wortliste">📋</button>
       <button class="library-btn bug-btn" id="bug-btn" aria-label="Fehler melden" title="Fehler melden">🐛</button>
       <a class="library-btn admin-link" id="admin-link" href="admin.html" target="_blank" rel="noopener" aria-label="Tickets / Admin" title="Tickets & Admin">⚙️</a>
     </header>
@@ -578,6 +626,7 @@
       <div class="review-topbar">
         <button class="review-topbar-btn" id="review-lib-btn" title="Zur Bibliothek">📚</button>
         <button class="review-topbar-btn" id="review-deck-btn" title="Alle Karten (Liste)">📋</button>
+        <button class="review-topbar-btn" id="review-newcard-btn" title="Neue Lernkarte">➕</button>
         <button class="review-topbar-btn" id="review-bug-btn" title="Fehler melden">🐛</button>
         <label class="review-autoplay-label" title="Satz automatisch vorlesen beim Kartenwechsel">
           <input type="checkbox" id="review-autoplay-cb"> Autoplay
@@ -586,6 +635,36 @@
       </div>
       <div class="review-card" id="review-card">
         <!-- wird per JS gefüllt -->
+      </div>
+    </div>
+
+    <!-- Neue-Karte-Formular (Ticket #15: direkte Kartenerstellung aus freiem Wissen) -->
+    <div class="newcard-overlay hidden" id="newcard-overlay">
+      <div class="newcard-card">
+        <div class="newcard-topbar">
+          <span>➕ Neue Lernkarte</span>
+          <button id="newcard-close-btn" title="Schließen">✕</button>
+        </div>
+        <label>Wort
+          <select id="newcard-lang">
+            <option value="es">Spanisch → EN</option>
+            <option value="de">Deutsch → EN</option>
+            <option value="ru">Russisch → EN</option>
+          </select>
+        </label>
+        <input id="newcard-word" type="text" placeholder="z.B. muralla" autocomplete="off">
+        <button id="newcard-lookup-btn" type="button">🔍 Übersetzen</button>
+        <span id="newcard-lookup-status" class="newcard-hint"></span>
+        <label>Übersetzung (EN)
+          <input id="newcard-gloss" type="text" placeholder="z.B. wall" autocomplete="off">
+        </label>
+        <label>Beispielsatz (optional)
+          <textarea id="newcard-sentence" rows="2" placeholder="z.B. La muralla es alta."></textarea>
+        </label>
+        <div id="newcard-status" class="newcard-hint"></div>
+        <div class="newcard-actions">
+          <button id="newcard-save-btn" class="primary">💾 Speichern</button>
+        </div>
       </div>
     </div>
 
@@ -658,7 +737,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.30";
+      const VERSION = "7.31";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1479,6 +1558,108 @@
       }
 
       reviewBtnEl.addEventListener("click", openReview);
+
+      // ─── Neue-Karte-Formular (Ticket #15) ─────────────────────────────
+      // Direkte Kartenerstellung aus freiem Wissen, ohne den Umweg über
+      // einen Wortanklick im Buchtext. Sprache ist frei wählbar, damit das
+      // Formular auch ohne offenes Buch funktioniert. Übersetzung wird per
+      // Klick auf „Übersetzen" via Wiktionary (lookUpOne) automatisch
+      // gefüllt — oder manuell getippt.
+      const newcardOverlay = document.getElementById("newcard-overlay");
+      const newcardLang = document.getElementById("newcard-lang");
+      const newcardWord = document.getElementById("newcard-word");
+      const newcardGloss = document.getElementById("newcard-gloss");
+      const newcardSentence = document.getElementById("newcard-sentence");
+      const newcardStatus = document.getElementById("newcard-status");
+      const newcardLookupStatus = document.getElementById("newcard-lookup-status");
+      let newcardEntry = null;   // letztes lookUpOne-Ergebnis (für Lemma-Normalisierung)
+
+      function openNewCardForm(lang) {
+        // Sprache vorbesetzen: explizit, sonst Buch-Sprache, sonst Default 'es'
+        newcardLang.value = lang || (book && book.wiktionary_lang) || "es";
+        newcardWord.value = "";
+        newcardGloss.value = "";
+        newcardSentence.value = "";
+        newcardStatus.textContent = "";
+        newcardLookupStatus.textContent = "";
+        newcardEntry = null;
+        newcardOverlay.classList.remove("hidden");
+        setTimeout(() => newcardWord.focus(), 50);
+      }
+      function closeNewCardForm() { newcardOverlay.classList.add("hidden"); }
+
+      async function lookupForNewCard() {
+        const word = newcardWord.value.trim();
+        const lang = newcardLang.value;
+        if (!word) { newcardLookupStatus.textContent = "Bitte Wort eingeben."; return; }
+        newcardLookupStatus.textContent = "Suche „" + word + "\"…";
+        const entry = await lookUpOne(word, lang);   // Wiktionary (index.html:2064)
+        if (!entry) {
+          newcardEntry = { lemma: word, gloss: "", pos: "", inflected: null };
+          newcardGloss.value = "";
+          newcardLookupStatus.textContent = "Nicht im Wörterbuch — bitte Übersetzung manuell eingeben.";
+          return;
+        }
+        if (entry.error) {
+          newcardLookupStatus.textContent = "Verbindungsfehler — bitte Übersetzung manuell eingeben.";
+          return;
+        }
+        newcardEntry = entry;
+        newcardWord.value = entry.lemma;   // normalisiert (z.B. Groß-/Kleinschreibung)
+        newcardGloss.value = entry.gloss || "";
+        newcardLookupStatus.textContent = entry.pos ? ("Gefunden: " + entry.pos) : "Gefunden.";
+      }
+
+      function saveNewCard() {
+        const lemma = (newcardEntry && newcardEntry.lemma) || newcardWord.value.trim();
+        const gloss = newcardGloss.value.trim();
+        const lang = newcardLang.value;
+        const sentence = newcardSentence.value.trim();
+        if (!lemma) { newcardStatus.textContent = "Bitte Wort eingeben."; return; }
+        if (!gloss) { newcardStatus.textContent = "Bitte Übersetzung eingeben (oder „Übersetzen\" klicken)."; return; }
+        const deck = loadDeck();
+        if (deck[lemma]) {
+          newcardStatus.textContent = "„" + lemma + "\" ist bereits im Deck.";
+          return;
+        }
+        const now = new Date();
+        deck[lemma] = {
+          lemma, gloss, pos: (newcardEntry && newcardEntry.pos) || "",
+          inflected: (newcardEntry && newcardEntry.inflected) || null,
+          lang, interval_hours: 0, due: now.toISOString(), reps: 0,
+          added: now.toISOString(), sentence: sentence || null,
+          surfaceForm: null, sentence_en: null, chunk_id: null,
+        };
+        saveDeck(deck);
+        syncCardToServer(lemma);   // Persistenz in D1 (async, nicht-blockierend)
+        newcardStatus.textContent = "✓ „" + lemma + "\" gespeichert.";
+        setTimeout(() => { closeNewCardForm(); }, 800);
+      }
+
+      // Direkter Zugang zur Wortliste (bisher nur über Review → 📋 erreichbar).
+      // Öffnet das Review-Overlay und springt sofort in die Listenansicht.
+      function openDeckDirect() {
+        reviewQueue = [];
+        reviewPos = 0;
+        reviewOverlay.classList.remove("hidden");
+        renderReviewDone();
+      }
+
+      document.getElementById("newcard-btn").addEventListener("click", () => openNewCardForm());
+      document.getElementById("review-newcard-btn").addEventListener("click", () => openNewCardForm());
+      document.getElementById("deck-btn").addEventListener("click", openDeckDirect);
+      document.getElementById("newcard-close-btn").addEventListener("click", closeNewCardForm);
+      document.getElementById("newcard-lookup-btn").addEventListener("click", lookupForNewCard);
+      document.getElementById("newcard-save-btn").addEventListener("click", saveNewCard);
+      newcardWord.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); lookupForNewCard(); }
+      });
+      newcardGloss.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); saveNewCard(); }
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !newcardOverlay.classList.contains("hidden")) closeNewCardForm();
+      });
 
       function setLevel(lvl) {
         level = lvl;
