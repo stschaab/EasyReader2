@@ -354,6 +354,8 @@
     .ticket-badge.closed { background: rgba(140, 140, 140, 0.2); color: #b0b0b0; }
     .ticket-badge.in_progress { background: rgba(220, 160, 60, 0.2); color: #e8b478; }
     .ticket-detail-desc { font-size: 0.9rem; line-height: 1.5; margin: 0.8rem 0; white-space: pre-wrap; }
+    .ticket-num { color: var(--muted); font-weight: 600; font-size: 0.8rem;
+                  letter-spacing: 0.04em; margin-bottom: 0.2rem; }
 
     /* Login-Screen (beim ersten Besuch) */
     .login-overlay {
@@ -840,7 +842,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.32";
+      const VERSION = "7.33";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1076,6 +1078,7 @@
           const type = t.type || "bug";
           const status = t.status || "open";
           return '<div class="ticket-row" data-ticket-id="' + t.id + '">' +
+                   '<div class="ticket-num">#' + t.id + '</div>' +
                    '<div class="ticket-title">' + escapeHtml(title) + '</div>' +
                    (desc ? '<div class="ticket-desc">' + escapeHtml(desc) + '</div>' : '') +
                    '<div class="ticket-meta">' +
@@ -1103,6 +1106,7 @@
           const status = t.status || "open";
           ticketsList.innerHTML =
             '<button class="review-topbar-btn" id="ticket-back-btn" style="margin-bottom:0.8rem">← Zurück</button>' +
+            '<div class="ticket-num">#' + id + '</div>' +
             '<div class="ticket-title" style="font-size:1.05rem">' + escapeHtml(title) + '</div>' +
             '<div class="ticket-meta" style="margin:0.5rem 0">' +
               '<span class="ticket-badge ' + type + '">' + type + '</span>' +
