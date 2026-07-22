@@ -14,6 +14,7 @@
 //   GET    /api/tickets/:id       – einzelnes Ticket öffentlich
 //   POST /api/bug-report          – Bug-Report mit optionalem Screenshot speichern
 //   POST /api/synonym             – Synonym+Rang+EN für ein spanisches Wort (GLM, live)
+//   GET  /api/dict?word=&lang=    – Wörterbuch-Lookup via GLM (mit D1-Cache)
 //   GET  /api/admin/bug-reports   – Ticket-Liste (X-Admin-Key geschützt)
 //   GET  /api/admin/bug-reports/:id – Einzelnes Ticket mit Screenshot
 //   PATCH /api/admin/bug-reports/:id – Ticket aktualisieren (status/type/...)
@@ -1169,6 +1170,150 @@ export default {
           note: parsed.note || "",
           syn_rank: synRank,
           syn_cefr: synCefr,
+        });
+      }
+
+      // ─── Wörterbuch-Lookup via GLM (mit D1-Cache) ──────────────────
+      // Ersatz für das frühere direkte Wiktionary-Popup im Frontend. GLM
+      // liefert Lemma + POS + englische Gloss; das Ergebnis wird in
+      // dict_cache pro (lemma, lang) gespeichert, sodass häufige Wörter
+      // nach dem ersten Lookup kostenlos aus dem Cache kommen.
+      if (path === "/api/dict" && request.method === "GET") {
+        const url = new URL(request.url);
+        const word = (url.searchParams.get("word") || "").trim();
+        const langCode = (url.searchParams.get("lang") || "es").trim();
+        if (!word) return json({ error: "word erforderlich" }, 400);
+
+        // Tabelle idempotent anlegen (wie bug_reports / user_cards).
+        await env.DB.prepare(
+          `CREATE TABLE IF NOT EXISTS dict_cache (
+            id INTEGER PRIMARY KEY,
+            lemma TEXT NOT NULL,
+            lang TEXT NOT NULL,
+            pos TEXT,
+            gloss TEXT,
+            inflected TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(lemma, lang)
+          )`
+        ).run();
+        await env.DB.prepare(
+          `CREATE INDEX IF NOT EXISTS idx_dict_cache_lookup ON dict_cache(lemma, lang)`
+        ).run();
+
+        // 1) Cache prüfen (lowercase Lookup).
+        const wordLc = word.toLowerCase();
+        const cached = await env.DB.prepare(
+          `SELECT lemma, pos, gloss, inflected FROM dict_cache WHERE lemma = ? AND lang = ?`
+        ).bind(wordLc, langCode).first();
+        if (cached) {
+          return json({
+            lemma: cached.lemma, pos: cached.pos || "", gloss: cached.gloss || "",
+            inflected: cached.inflected || null, source: "cache",
+          });
+        }
+
+        // 2) GLM aufrufen bei Cache-Miss.
+        const LANG_NAME = { ru: "Russian", es: "Spanish", de: "German" }[langCode] || langCode;
+        const SCRIPT = { ru: "Cyrillic", es: "Latin", de: "Latin" }[langCode] || "Latin";
+        const dictSystem =
+          "You are a bilingual " + LANG_NAME + "/English dictionary. " +
+          "For the given " + LANG_NAME + " word (which may be inflected), return its base form " +
+          "(lemma: infinitive for verbs, singular masculine for adjectives, singular for nouns) " +
+          "and a concise English translation.\n\n" +
+          "Return a JSON object with EXACTLY these keys:\n" +
+          '  "lemma":  the ' + LANG_NAME + ' base form, in ' + SCRIPT + " script\n" +
+          '  "pos":    part of speech (noun, verb, adjective, adverb, pronoun, etc.)\n' +
+          '  "gloss":  the most common English meaning (1 short phrase, max 5 words)\n' +
+          '  "notFound": true ONLY if the input is not a real ' + LANG_NAME + " word " +
+          "(typo, proper noun, gibberish, or a word from another language)\n\n" +
+          "RULES:\n" +
+          "- The lemma MUST be written in " + SCRIPT + " script.\n" +
+          "- Choose the everyday meaning; ignore rare senses.\n" +
+          "- Return ONLY the JSON object. No prose, no code fences.";
+        const dictUser =
+          LANG_NAME + ' word: "' + word + '"\n\nReturn ONLY the JSON object.';
+
+        let parsed = null;
+        let lastError = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          if (attempt > 0) await new Promise((r) => setTimeout(r, 1500));
+          try {
+            const glmRes = await fetch("https://open.bigmodel.cn/api/anthropic/v1/messages", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-api-key": env.GLM_API_KEY,
+                "anthropic-version": "2023-06-01",
+              },
+              body: JSON.stringify({
+                model: "glm-4.6",
+                max_tokens: 120,
+                system: dictSystem,
+                messages: [{ role: "user", content: dictUser }],
+                temperature: 0.2,
+              }),
+            });
+            if (!glmRes.ok) {
+              const errText = await glmRes.text();
+              if (!/1302|rate/i.test(errText)) {
+                lastError = "HTTP " + glmRes.status;
+                break;
+              }
+              lastError = "HTTP " + glmRes.status + " (rate?)";
+              continue;
+            }
+            const gj = await glmRes.json();
+            const candidate = (gj.content || [])
+              .filter((p) => p.type === "text")
+              .map((p) => p.text)
+              .join("")
+              .trim();
+            // CJK-Guard: GLM hat die Sprache verloren.
+            if (/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(candidate)) {
+              lastError = "CJK-Antwort";
+              if (attempt < 2) continue;
+            }
+            // JSON extrahieren (mit Fallback auf {...}-Slice).
+            try {
+              parsed = JSON.parse(candidate);
+            } catch (e) {
+              const m = candidate.match(/\{[\s\S]*\}/);
+              if (!m) { lastError = "kein JSON"; continue; }
+              try { parsed = JSON.parse(m[0]); }
+              catch (e2) { lastError = "JSON-Parse"; continue; }
+            }
+            // notFound kurzschließen — nicht cachen, nicht validieren.
+            if (parsed.notFound === true) break;
+            // Skript-Validierung für Russisch.
+            if (langCode === "ru" && parsed.lemma && !/[А-Яа-яЁё]/.test(parsed.lemma)) {
+              lastError = "Lemma nicht kyrillisch";
+              if (attempt < 2) continue;
+            }
+            if (parsed.lemma && parsed.gloss) break;  // erfolgreich
+            lastError = "unvollständig";
+          } catch (e) {
+            lastError = e.message;
+          }
+        }
+
+        // 3) notFound → nicht cachen, Frontend zeigt „Nicht im Wörterbuch".
+        if (parsed && parsed.notFound === true) {
+          return json({ notFound: true });
+        }
+        if (!parsed || !parsed.lemma || !parsed.gloss) {
+          return json({ error: "GLM-Fehler: " + (lastError || "unbekannt") }, 502);
+        }
+
+        // 4) Cache schreiben (lowercase Key, Original-Lemma im Wert).
+        await env.DB.prepare(
+          `INSERT OR REPLACE INTO dict_cache (lemma, lang, pos, gloss, inflected)
+           VALUES (?, ?, ?, ?, ?)`
+        ).bind(wordLc, langCode, parsed.pos || null, parsed.gloss, parsed.inflected || null).run();
+
+        return json({
+          lemma: parsed.lemma, pos: parsed.pos || "", gloss: parsed.gloss,
+          inflected: parsed.inflected || null, source: "glm",
         });
       }
 

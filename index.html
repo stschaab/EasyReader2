@@ -2504,35 +2504,24 @@
         renderDict(word, entry, x, y);
       }
 
-      // lookUpOne: ein einzelnes Wort gegen Wiktionary abfragen.
+      // lookUpOne: Wörterbuch-Lookup via GLM-Worker (mit D1-Cache).
       // Liefert einen Entry {lemma, pos, gloss, inflected, foundLemma} oder null bei nicht gefunden.
+      // (Früher direkter Wiktionary-Call; GLM ist zuverlässiger bei Lemma-Normalisierung
+      //  und Übersetzung — Tickets #9/#14 waren Symptome der unzuverlässigen Wiktionary-Glossen.)
       async function lookUpOne(word, lang) {
         try {
-          const res = await fetch("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(word));
-          if (res.status === 404) return null;
-          if (!res.ok) throw new Error("HTTP " + res.status);
-          const json = await res.json();
-          if (!json[lang] || !json[lang].length) return null;
-          const section = json[lang][0], def0 = section.definitions[0], defText = stripTags(def0.definition);
-          const lemma = extractLemma(defText, lang, word);
-          let gloss = defText, displayLemma = word;
-          if (lemma && lemma.toLowerCase() !== word.toLowerCase()) {
-            displayLemma = lemma;
-            const lemmaClean = stripAccents(lemma);
-            try {
-              const res2 = await fetch("https://en.wiktionary.org/api/rest_v1/page/definition/" + encodeURIComponent(lemmaClean));
-              if (res2.ok) {
-                const j2 = await res2.json();
-                if (j2[lang] && j2[lang][0] && j2[lang][0].definitions[0]) gloss = stripTags(j2[lang][0].definitions[0].definition);
-              }
-            } catch (e) {}
-          }
+          const url = API + "/api/dict?word=" + encodeURIComponent(word) + "&lang=" + encodeURIComponent(lang);
+          const res = await fetchWithTimeout(url, {}, 20000);
+          if (!res.ok) return { error: true };
+          const data = await res.json();
+          if (data.notFound) return null;
+          if (data.error) return { error: true };
           return {
-            lemma: displayLemma,
-            pos: section.partOfSpeech,
-            gloss,
-            inflected: (lemma && lemma.toLowerCase() !== word.toLowerCase()) ? word : null,
-            foundLemma: displayLemma,
+            lemma: data.lemma,
+            pos: data.pos || "",
+            gloss: data.gloss || "",
+            inflected: (data.lemma && data.lemma.toLowerCase() !== word.toLowerCase()) ? word : null,
+            foundLemma: data.lemma,
           };
         } catch (e) {
           return { error: true };
