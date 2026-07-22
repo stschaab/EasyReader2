@@ -90,6 +90,50 @@ export default {
         return json({ chunk_id, level, target_rank: targetRank, tokens_total: tokens.length, lemmas_total: lookupTokens.length, known_words: knownWords, hard_words: hardWords, hard_count: hardWords.length });
       }
 
+      // ─── TEMPORÄR Phase 0: Go/No-Go Embedding-Endpoint-Test ─────────
+      // Ruft den Cloudflare Workers AI Embedding-Endpunkt auf (binding AI),
+      // um zu prüfen, ob Workers-AI-Embeddings laufen. GLM paas/v4 war mit
+      // Coding-Plan-Key nicht freigeschaltet (1211), deshalb CF-Stack.
+      // Testet multilinguale Modelle (bge-m3, qwen3, embeddinggemma).
+      //   GET /api/debug/embed?text=hola&model=@cf/baai/bge-m3
+      //   -> { ok, results:[{model,ok,dim,sample}|{model,ok:false,error}] }
+      // Wird nach erfolgreichem Test wieder entfernt.
+      if (path === "/api/debug/embed" && request.method === "GET") {
+        const text = (url.searchParams.get("text") || "hola mundo").toString();
+        const requested = (url.searchParams.get("model") || "").toString();
+        // Multilinguale Embedding-Modelle aus dem Workers-AI-Katalog.
+        const modelsToTry = requested ? [requested] : [
+          "@cf/baai/bge-m3",
+          "@cf/qwen/qwen3-embedding-0.6b",
+          "@cf/google/embeddinggemma-300m",
+        ];
+        if (!env.AI) return json({ error: "Workers AI binding (env.AI) fehlt" }, 500);
+        const results = [];
+        for (const model of modelsToTry) {
+          try {
+            const aiRes = await env.AI.run(model, { text: [text] });
+            // Workers AI Embeddings: data ist Array-of-Arrays, data[0] = Vektor.
+            // (Anders als OpenAI-Format. shape = [n_inputs, dim].)
+            const first = aiRes && aiRes.data && aiRes.data[0];
+            const vec = Array.isArray(first) ? first : (first && first.embedding);
+            if (!Array.isArray(vec) || vec.length === 0) {
+              results.push({
+                model, ok: false,
+                error: "Kein Vektor an erwarteter Stelle",
+                shape: aiRes && aiRes.shape,
+                dataType: Array.isArray(first) ? "array" : typeof first,
+              });
+              continue;
+            }
+            results.push({ model, ok: true, dim: vec.length, sample: vec.slice(0, 5) });
+          } catch (e) {
+            results.push({ model, ok: false, error: (e.message || String(e)).slice(0, 300) });
+          }
+        }
+        const anyOk = results.some(r => r.ok);
+        return json({ ok: anyOk, results });
+      }
+
       // ─── Bücher-Liste ───
       if (path === "/api/books" && request.method === "GET") {
         const r = await env.DB.prepare(
@@ -852,7 +896,73 @@ export default {
         const p = await env.DB.prepare(
           `SELECT chunk_index, level FROM progress WHERE user_id = ? AND book_id = ?`
         ).bind(userId, bookId).first();
-        return json({ progress: p || { chunk_index: 0, level: "original" } });
+        // progress: null bei fehlendem Eintrag (Ticket #10). Früher wurde hier
+        // ein Default {chunk_index:0, level:"original"} geliefert — das war im
+        // Frontend immer truthy, sodass der localStorage-Fallback (echter
+        // Stand nach Offline-Lesen) nie griff und Position verloren ging.
+        return json({ progress: p || null });
+      }
+
+      // ─── Lesefortschritt: gelesene Chunks (chunk_visits) ────────────
+      // Ergänzt die progress-Tabelle (die nur den LETZTEN chunk_index hält)
+      // um die Historie aller gelesener Chunks pro User+Buch. Grundlage für
+      // das semantische Retrieval des Chat-Buddys (s. /api/chat) und für
+      // Fortschrittsanzeigen.
+      //
+      //   POST /api/visits            – einen Chunk als gelesen markieren (upsert)
+      //   GET  /api/visits/:bookId    – alle gelesenen Chunk-Indizes des Buchs
+      const isVisitCall = path === "/api/visits" || path.startsWith("/api/visits/");
+      if (isVisitCall) {
+        await env.DB.prepare(
+          `CREATE TABLE IF NOT EXISTS chunk_visits (
+            user_id     TEXT NOT NULL,
+            book_id     INTEGER NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            lang        TEXT,
+            level       TEXT,
+            visited_at  TEXT DEFAULT (datetime('now')),
+            PRIMARY KEY (user_id, book_id, chunk_index)
+          )`
+        ).run();
+        await env.DB.prepare(
+          `CREATE INDEX IF NOT EXISTS idx_chunk_visits_user
+             ON chunk_visits(user_id, book_id)`
+        ).run();
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO users (id, type) VALUES (?, 'anon')`
+        ).bind(userId).run();
+
+        // POST /api/visits – Chunk als gelesen markieren
+        if (path === "/api/visits" && request.method === "POST") {
+          const b = await request.json();
+          const bookId2 = parseInt(b.book_id, 10);
+          const ci = parseInt(b.chunk_index, 10);
+          if (!Number.isInteger(bookId2) || !Number.isInteger(ci)) {
+            return json({ error: "book_id und chunk_index (int) erforderlich" }, 400);
+          }
+          await env.DB.prepare(
+            `INSERT OR REPLACE INTO chunk_visits
+               (user_id, book_id, chunk_index, lang, level, visited_at)
+             VALUES (?, ?, ?, ?, ?, datetime('now'))`
+          ).bind(
+            userId, bookId2, ci,
+            (b.lang || null),
+            (b.level || null)
+          ).run();
+          return json({ ok: true });
+        }
+
+        // GET /api/visits/:bookId – gelesene Chunk-Indizes + jeweiliges Level
+        const visitMatch = path.match(/^\/api\/visits\/(\d+)$/);
+        if (visitMatch && request.method === "GET") {
+          const bookId2 = parseInt(visitMatch[1], 10);
+          const r = await env.DB.prepare(
+            `SELECT chunk_index, level FROM chunk_visits
+             WHERE user_id = ? AND book_id = ?
+             ORDER BY chunk_index`
+          ).bind(userId, bookId2).all();
+          return json({ visited: r.results || [] });
+        }
       }
 
       // ─── Vokabel-Deck (user_cards) ─────────────────────────────────

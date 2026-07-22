@@ -842,7 +842,7 @@
 
   <script>
     (function () {
-      const VERSION = "7.33";
+      const VERSION = "7.34";
       const API = "https://easyreader2.st-schaab.workers.dev";
       let LEVELS = ["original", "4000", "3000", "2000", "1000"]; // Default (ältere book-N.json ohne levels-Feld)
       const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"]; // CEFR-Labels ohne „ W."-Suffix
@@ -1433,11 +1433,13 @@
           });
 
           // Progress laden. Reihenfolge: API (D1) → localStorage (Fallback).
-          // WICHTIG: localStorage wird auch herangezogen, wenn die API zwar
-          // antwortet, aber keinen Stand für dieses Buch hat (z. B. weil es
-          // erst nach Worker-Ausfall gelesen wurde). Früher steckte der
-          // localStorage-Fallback nur im catch-Block und wurde so bei
-          // `{progress: null}`-Antworten ignoriert → Position verloren.
+          // Der GET-Endpoint liefert {progress: null}, wenn für diesen User
+          // kein Eintrag existiert (Ticket #10) — dann greift der Fallback auf
+          // den lokalen Cache (echter Stand z. B. nach Offline-Lesen).
+          // FRÜHERER BUG: der Endpoint gab immer ein Default-Objekt
+          // {chunk_index:0, level:"original"} zurück → saved.progress war immer
+          // truthy → progressLoaded immer true → Fallback lief nie → Position
+          // (und danach auch der localStorage-Wert) verloren.
           idx = 0; level = "original";
           let progressLoaded = false;
           try {
@@ -1453,7 +1455,9 @@
             const ls = localStorage.getItem("er2_" + id + "_pos");
             if (ls) { try { const p = JSON.parse(ls); idx = p.idx || 0; level = p.level || "original"; } catch (e2) {} }
           }
-          setLevel(level);
+          // skipSave: nicht beim Laden speichern — sonst überschreibt der
+          // geladene (ggf. leere) Stand den localStorage (Ticket #10).
+          setLevel(level, { skipSave: true });
           render();
         } catch (e) {
           bookListEl.style.opacity = "";
@@ -1925,14 +1929,17 @@
         if (e.key === "Escape" && !newcardOverlay.classList.contains("hidden")) closeNewCardForm();
       });
 
-      function setLevel(lvl) {
+      function setLevel(lvl, opts) {
         level = lvl;
         Array.prototype.forEach.call(levelsEl.children, function (b) {
           b.classList.toggle("active", b.dataset.lvl === lvl);
         });
         stopTTS();
         render();
-        saveProgress();
+        // opts.skipSave: beim initialen Laden aus openBook() nicht speichern —
+        // sonst würde der (ggf. noch leere) geladene Stand den echten
+        // localStorage-Wert überschreiben (Ticket #10).
+        if (!opts || !opts.skipSave) saveProgress();
         checkForUpdate();
       }
 
@@ -2019,7 +2026,24 @@
         progressTimer = setTimeout(function () {
           apiPost("/api/progress", { book_id: bookId, chunk_index: idx, level: level })
             .catch(function () { /* Progress ist optional */ });
+          // Den aktuellen Chunk als gelesen markieren (für Chat-Buddy-Retrieval
+          // + Fortschrittsanzeige). Best-Effort, parallel zum Progress.
+          markVisited(idx);
         }, 1500);
+      }
+
+      // ── Lesefortschritt: Chunk als gelesen markieren ──────────────
+      // Lokales Set der gelesenen Chunks (sofortige UI-Nutzbarkeit) + Visit
+      // ans API (für Retrieval/Fortschritt). Debounced via saveProgress,
+      // nie doppelt pro Chunk schicken.
+      let visited = new Set();
+      function markVisited(i) {
+        if (!bookId || visited.has(i)) return;
+        visited.add(i);
+        apiPost("/api/visits", {
+          book_id: bookId, chunk_index: i,
+          lang: (book && book.lang) || null, level: level
+        }).catch(function () { /* Visits sind optional */ });
       }
 
       function wrapWords(text) {
